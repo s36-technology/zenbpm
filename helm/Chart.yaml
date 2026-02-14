@@ -1,0 +1,5 @@
+apiVersion: v2
+name: zenbpm
+description: Helm chart cho ZenBPM Workflow Engine (Golang)
+version: 0.1.0
+appVersion: "latest"

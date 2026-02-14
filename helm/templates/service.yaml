@@ -1,0 +1,31 @@
+# Service nội bộ cho Raft Cluster
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-internal
+spec:
+  clusterIP: None
+  selector:
+    app: {{ .Release.Name }}
+  ports:
+    - port: {{ .Values.service.raftPort }}
+      name: raft
+
+---
+# Service cho bên ngoài gọi (UI/Worker)
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}
+spec:
+  type: ClusterIP
+  selector:
+    app: {{ .Release.Name }}
+  ports:
+    - port: {{ .Values.service.restPort }}
+      targetPort: {{ .Values.service.restPort }}
+      protocol: TCP
+      name: rest-api
+    - port: {{ .Values.service.grpcPort }}
+      targetPort: {{ .Values.service.grpcPort }}
+      name: grpc

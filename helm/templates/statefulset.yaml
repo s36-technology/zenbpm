@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ .Release.Name }}
+spec:
+  serviceName: {{ .Release.Name }}-internal
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Name }}
+    spec:
+      containers:
+        - name: zenbpm
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          # Script khởi động tự động tính toán node đầu tiên làm leader, các node sau join vào
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              export NODE_ID=$(hostname)
+              export ADDR=$(hostname).{{ .Release.Name }}-internal:{{ .Values.service.raftPort }}
+              if [ "$NODE_ID" = "{{ .Release.Name }}-0" ]; then
+                /app/zenbpm start --id $NODE_ID --address $ADDR --http-address 0.0.0.0:{{ .Values.service.restPort }} --grpc-address 0.0.0.0:{{ .Values.service.grpcPort }}
+              else
+                /app/zenbpm start --id $NODE_ID --address $ADDR --http-address 0.0.0.0:{{ .Values.service.restPort }} --grpc-address 0.0.0.0:{{ .Values.service.grpcPort }} --join {{ .Release.Name }}-0.{{ .Release.Name }}-internal:{{ .Values.service.raftPort }}
+              fi
+          ports:
+            - containerPort: {{ .Values.service.restPort }}
+              name: http
+            - containerPort: {{ .Values.service.grpcPort }}
+              name: grpc
+            - containerPort: {{ .Values.service.raftPort }}
+              name: raft
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/zenbpm
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ {{ .Values.persistence.accessMode | quote }} ]
+        resources:
+          requests:
+            storage: {{ .Values.persistence.size }}

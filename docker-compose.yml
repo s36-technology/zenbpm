@@ -1,0 +1,67 @@
+version: '3.8'
+
+services:
+  # Node 1: Leader init cluster
+  zenbpm-1:
+    image: lucpassiogolf/zenbpm:latest
+    container_name: zenbpm-1
+    command: ["start", "--id", "node1", "--address", "zenbpm-1:4001", "--http-address", "zenbpm-1:8080", "--grpc-address", "zenbpm-1:9090"]
+    ports:
+      - "8081:8080" # REST API
+      - "9081:9090" # gRPC
+    volumes:
+      - zenbpm_data:/var/lib/zenbpm
+    networks:
+      - s36-network
+
+  # Node 2: Join to Node 1
+  zenbpm-2:
+    image: lucpassiogolf/zenbpm:latest
+    container_name: zenbpm-2
+    command: ["start", "--id", "node2", "--address", "zenbpm-2:4001", "--http-address", "zenbpm-2:8080", "--grpc-address", "zenbpm-2:9090", "--join", "zenbpm-1:4001"]
+    depends_on:
+      - zenbpm-1
+    ports:
+      - "8082:8080"
+      - "9082:9090"
+    volumes:
+      - zenbpm_data_2:/var/lib/zenbpm
+    networks:
+      - s36-network
+
+  # Node 3: Join to Node 1
+  zenbpm-3:
+    image: lucpassiogolf/zenbpm:latest
+    container_name: zenbpm-3
+    command: ["start", "--id", "node3", "--address", "zenbpm-3:4001", "--http-address", "zenbpm-3:8080", "--grpc-address", "zenbpm-3:9090", "--join", "zenbpm-1:4001"]
+    depends_on:
+      - zenbpm-1
+    ports:
+      - "8083:8080"
+      - "9083:9090"
+    volumes:
+      - zenbpm_data_3:/var/lib/zenbpm
+    networks:
+      - s36-network
+
+  # ZenBPM UI: Dashboard management
+  zenbpm-ui:
+    image: lucpassiogolf/zenbpm-ui:latest
+    container_name: zenbpm-ui
+    ports:
+      - "3000:80"
+    environment:
+      - API_BASE_URL=http://zenbpm-1:8080
+    depends_on:
+      - zenbpm-1
+    networks:
+      - s36-network
+
+networks:
+  s36-network:
+    name: s36-network
+
+volumes:
+  zenbpm_data:
+  zenbpm_data_2:
+  zenbpm_data_3:

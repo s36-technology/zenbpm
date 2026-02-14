@@ -1,0 +1,41 @@
+replicaCount: 3 # Nên là số lẻ (3, 5) để thuật toán Raft hoạt động tốt
+
+image:
+  repository: lucpassiogolf/zenbpm:latest
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+service:
+  restPort: 8080
+  grpcPort: 9090
+  raftPort: 4001
+
+persistence:
+  enabled: true
+  size: 5Gi
+  accessMode: ReadWriteOnce
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 200m
+    memory: 256Mi
+
+ingress:
+  enabled: true
+  className: "nginx" # Hoặc gce, traefik tùy cluster của mày
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m" # Cho phép upload file BPMN lớn
+    # Nếu dùng SSL/TLS thì thêm các annotation của cert-manager vào đây
+  hosts:
+    - host: api.zenbpm.local  # Domain mày muốn dùng
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+  # - secretName: zenbpm-tls
+  #   hosts:
+  #     - api.zenbpm.local

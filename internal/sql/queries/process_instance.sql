@@ -36,7 +36,8 @@ WHERE
     AND (pi.parent_process_execution_token IS NULL
         OR parent_pi.state IN (4, 6, 9))
     AND (pi.history_delete_sec IS NULL
-        OR pi.history_delete_sec < @currUnix);
+        OR pi.history_delete_sec < @currUnix)
+LIMIT @limit;
 
 -- name: FindActiveInstances :many
 SELECT
@@ -58,6 +59,7 @@ SELECT
 FROM
     process_instance AS pi
     INNER JOIN process_definition AS pd ON pi.process_definition_key = pd.key
+
 WHERE
     -- force sqlc to keep sort_by_order param by mentioning it in a where clause which is always true
     CASE WHEN @sort_by_order IS NULL THEN 1 ELSE 1 END
@@ -91,6 +93,16 @@ WHERE
         1
     END
     AND
+    CASE WHEN @activity_id IS NOT NULL THEN
+        EXISTS (
+            SELECT 1 FROM execution_token et
+            WHERE et.process_instance_key = pi.key
+              AND et.element_id = @activity_id
+        )
+    ELSE
+        1
+    END
+    AND
     CASE WHEN @created_from IS NOT NULL THEN
        pi.created_at >= @created_from
     ELSE
@@ -108,6 +120,22 @@ WHERE
     ELSE
         1
     END
+    AND
+    -- workaround for sqlc
+    (
+    CASE WHEN @filter_type_call_activity IS NULL AND @filter_type_multi_instance IS NULL AND @filter_type_default IS NULL AND @filter_type_sub_process IS NULL THEN
+       1
+    ELSE
+         (@filter_type_call_activity IS NOT NULL AND pi.process_type = @filter_type_call_activity)
+         OR
+         (@filter_type_multi_instance IS NOT NULL AND pi.process_type = @filter_type_multi_instance)
+         OR
+         (@filter_type_default IS NOT NULL AND pi.process_type = @filter_type_default)
+         OR
+         (@filter_type_sub_process IS NOT NULL AND pi.process_type = @filter_type_sub_process)
+    END
+    )
+    -- end of workaround
 ORDER BY
 -- workaround for sqlc which does not replace params in order by
   CASE CAST(?1 AS TEXT) WHEN 'createdAt_asc'  THEN pi.created_at END ASC,

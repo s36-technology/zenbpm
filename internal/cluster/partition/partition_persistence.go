@@ -108,18 +108,32 @@ func NewDB(store *store.Store, partition uint32, logger hclog.Logger, cfg config
 func (rq *DB) scheduleDataCleanup() {
 	t := time.NewTicker(30 * time.Second)
 	for range t.C {
-		err := rq.dataCleanup(time.Now())
+		t.Stop()
+		cleaningTriggered, err := rq.dataCleanup(time.Now())
 		if err != nil {
 			rq.logger.Error(fmt.Sprintf("Error while performing data cleanup: %s", err))
+			t.Reset(30 * time.Second)
+			continue
+		}
+		if cleaningTriggered {
+			//speed up cleaning if there is a lot to clean
+			t.Reset(5 * time.Second)
+		} else {
+			t.Reset(30 * time.Second)
 		}
 	}
 }
 
-func (rq *DB) dataCleanup(currTime time.Time) error {
+// dataCleanup returns true if cleanup was triggered
+// cleanup is being done in batches of size historyDeleteThreshold
+func (rq *DB) dataCleanup(currTime time.Time) (bool, error) {
 	ctx := context.Background()
-	processes, _ := rq.Queries.FindInactiveInstancesToDelete(ctx, ssql.NullInt64{
-		Int64: currTime.Unix(),
-		Valid: true,
+	processes, _ := rq.Queries.FindInactiveInstancesToDelete(ctx, sql.FindInactiveInstancesToDeleteParams{
+		CurrUnix: ssql.NullInt64{
+			Int64: currTime.Unix(),
+			Valid: true,
+		},
+		Limit: int64(rq.historyDeleteThreshold),
 	})
 	processesNullInt64 := make([]ssql.NullInt64, 0)
 	for _, processId := range processes {
@@ -129,7 +143,7 @@ func (rq *DB) dataCleanup(currTime time.Time) error {
 		})
 	}
 	var err error
-	if len(processes) > rq.historyDeleteThreshold {
+	if len(processes) == rq.historyDeleteThreshold {
 		err = errors.Join(err, rq.Queries.DeleteProcessInstancesDecisionInstances(ctx, processesNullInt64))
 		err = errors.Join(err, rq.Queries.DeleteFlowElementInstance(ctx, processes))
 		err = errors.Join(err, rq.Queries.DeleteProcessInstancesTokens(ctx, processes))
@@ -138,8 +152,9 @@ func (rq *DB) dataCleanup(currTime time.Time) error {
 		err = errors.Join(err, rq.Queries.DeleteProcessInstancesMessageSubscriptions(ctx, processes))
 		err = errors.Join(err, rq.Queries.DeleteProcessInstancesIncidents(ctx, processes))
 		err = errors.Join(err, rq.Queries.DeleteProcessInstances(ctx, processes))
+		return true, nil
 	}
-	return err
+	return false, err
 }
 
 func (rq *DB) ExecuteStatements(ctx context.Context, statements []*proto.Statement) ([]*proto.ExecuteQueryResponse, error) {
@@ -176,6 +191,8 @@ func (rq *DB) generateStatement(sql string, parameters ...interface{}) *proto.St
 
 	for _, par := range parameters {
 		switch par := par.(type) {
+		case nil:
+			resultParams = append(resultParams, &proto.Parameter{})
 		case string:
 			resultParams = append(resultParams, &proto.Parameter{
 				Value: &proto.Parameter_S{
@@ -393,7 +410,7 @@ func (rq *DB) GetLatestDecisionDefinitionById(ctx context.Context, decisionId st
 	var res dmnruntime.DecisionDefinition
 	decisionDefinition, err := rq.Queries.FindLatestDecisionDefinitionById(ctx, decisionId)
 	if err != nil {
-		return res, fmt.Errorf("failed to find latest decision definition by id: %w", err)
+		return res, fmt.Errorf("failed to find latest decision definition by id: %w", fmt.Errorf("%w: %w", err, storage.ErrNotFound))
 	}
 
 	res = dmnruntime.DecisionDefinition{
@@ -437,7 +454,7 @@ func (rq *DB) GetLatestDecisionDefinitionByIdAndVersionTag(ctx context.Context, 
 		},
 	)
 	if err != nil {
-		return res, fmt.Errorf("failed to find latest decision by id and version tag: %w", err)
+		return res, fmt.Errorf("failed to find latest decision by id and version tag: %w", fmt.Errorf("%w: %w", err, storage.ErrNotFound))
 	}
 
 	res = dmnruntime.DecisionDefinition{
@@ -461,7 +478,7 @@ func (rq *DB) GetLatestDecisionDefinitionByIdAndDmnResourceDefinitionId(ctx cont
 		},
 	)
 	if err != nil {
-		return res, fmt.Errorf("failed to find latest decision by id and dmnResourceDefinitionId: %w", err)
+		return res, fmt.Errorf("failed to find latest decision by id and dmnResourceDefinitionId: %w", fmt.Errorf("%w: %w", err, storage.ErrNotFound))
 	}
 
 	res = dmnruntime.DecisionDefinition{
@@ -485,7 +502,7 @@ func (rq *DB) GetDecisionDefinitionByIdAndDmnResourceDefinitionKey(ctx context.C
 			DecisionID:               decisionId,
 		})
 	if err != nil {
-		return res, fmt.Errorf("failed to find decision by key: %w", err)
+		return res, fmt.Errorf("failed to find decision by key: %w", fmt.Errorf("%w: %w", err, storage.ErrNotFound))
 	}
 
 	res = dmnruntime.DecisionDefinition{
@@ -548,7 +565,7 @@ func (rq *DB) FindLatestDmnResourceDefinitionById(ctx context.Context, dmnResour
 	var res dmnruntime.DmnResourceDefinition
 	dbDefinition, err := rq.Queries.FindLatestDmnResourceDefinitionById(ctx, dmnResourceDefinitionId)
 	if err != nil {
-		return res, fmt.Errorf("failed to find latest dmn resource definition: %w", err)
+		return res, fmt.Errorf("failed to find latest dmn resource definition: %w", fmt.Errorf("%w: %w", err, storage.ErrNotFound))
 	}
 
 	dd, ok := rq.drdCache.Get(dbDefinition.Key)
@@ -586,7 +603,7 @@ func (rq *DB) FindDmnResourceDefinitionByKey(ctx context.Context, dmnResourceDef
 	var res dmnruntime.DmnResourceDefinition
 	drd, err := rq.Queries.FindDmnResourceDefinitionByKey(ctx, dmnResourceDefinitionKey)
 	if err != nil {
-		return res, fmt.Errorf("failed to find latest dmn resource definition: %w", err)
+		return res, fmt.Errorf("failed to find latest dmn resource definition: %w", fmt.Errorf("%w: %w", err, storage.ErrNotFound))
 	}
 
 	var definitions dmn.TDefinitions
@@ -613,7 +630,7 @@ func (rq *DB) FindDmnResourceDefinitionByKey(ctx context.Context, dmnResourceDef
 func (rq *DB) FindDmnResourceDefinitionsById(ctx context.Context, dmnResourceDefinitionId string) ([]dmnruntime.DmnResourceDefinition, error) {
 	drds, err := rq.Queries.FindDmnResourceDefinitionsById(ctx, dmnResourceDefinitionId)
 	if err != nil {
-		return nil, fmt.Errorf("failed to find dmn resource definitions by id: %w", err)
+		return nil, fmt.Errorf("failed to find dmn resource definitions by id: %w", fmt.Errorf("%w: %w", err, storage.ErrNotFound))
 	}
 
 	res := make([]dmnruntime.DmnResourceDefinition, len(drds))
@@ -668,7 +685,7 @@ var _ storage.DecisionInstanceStorageReader = &DB{}
 func (rq *DB) FindDecisionInstanceByKey(ctx context.Context, key int64) (dmnruntime.DecisionInstance, error) {
 	result, err := rq.Queries.FindDecisionInstanceByKey(ctx, key)
 	if err != nil {
-		return dmnruntime.DecisionInstance{}, fmt.Errorf("failed to find decision results by execution token ids: %w", err)
+		return dmnruntime.DecisionInstance{}, fmt.Errorf("failed to find decision results by execution token ids: %w", fmt.Errorf("%w: %w", err, storage.ErrNotFound))
 	}
 	var processInstanceKey int64
 	if result.ProcessInstanceKey.Valid {
@@ -692,7 +709,7 @@ func (rq *DB) FindLatestProcessDefinitionById(ctx context.Context, processDefini
 	var res bpmnruntime.ProcessDefinition
 	dbDefinition, err := rq.Queries.FindLatestProcessDefinitionById(ctx, processDefinitionId)
 	if err != nil {
-		return res, fmt.Errorf("failed to find latest process definition: %w", err)
+		return res, fmt.Errorf("failed to find latest process definition: %w", fmt.Errorf("%w: %w", err, storage.ErrNotFound))
 	}
 
 	pd, ok := rq.pdCache.Get(dbDefinition.Key)
@@ -729,7 +746,7 @@ func (rq *DB) FindProcessDefinitionByKey(ctx context.Context, processDefinitionK
 	var res bpmnruntime.ProcessDefinition
 	dbDefinition, err := rq.Queries.FindProcessDefinitionByKey(ctx, processDefinitionKey)
 	if err != nil {
-		return res, fmt.Errorf("failed to find latest process definition: %w", err)
+		return res, fmt.Errorf("failed to find latest process definition: %w", fmt.Errorf("%w: %w", err, storage.ErrNotFound))
 	}
 
 	var definitions bpmn20.TDefinitions
@@ -755,7 +772,7 @@ func (rq *DB) FindProcessDefinitionByKey(ctx context.Context, processDefinitionK
 func (rq *DB) FindProcessDefinitionsById(ctx context.Context, processId string) ([]bpmnruntime.ProcessDefinition, error) {
 	dbDefinitions, err := rq.Queries.FindProcessDefinitionsById(ctx, processId)
 	if err != nil {
-		return nil, fmt.Errorf("failed to find process definitions by id: %w", err)
+		return nil, fmt.Errorf("failed to find process definitions by id: %w", fmt.Errorf("%w: %w", err, storage.ErrNotFound))
 	}
 
 	res := make([]bpmnruntime.ProcessDefinition, len(dbDefinitions))
@@ -812,7 +829,7 @@ var _ storage.ProcessInstanceStorageReader = &DB{}
 func (rq *DB) RefreshProcessInstance(ctx context.Context, processInstance bpmnruntime.ProcessInstance) (err error) {
 	dbInstance, err := rq.Queries.GetProcessInstance(ctx, processInstance.ProcessInstance().Key)
 	if err != nil {
-		return fmt.Errorf("failed to find process instance by key: %w", err)
+		return fmt.Errorf("failed to find process instance by key: %w", fmt.Errorf("%w: %w", err, storage.ErrNotFound))
 	}
 
 	variables := map[string]any{}
@@ -864,7 +881,7 @@ func (rq *DB) RefreshProcessInstance(ctx context.Context, processInstance bpmnru
 func (rq *DB) FindProcessInstanceByKey(ctx context.Context, processInstanceKey int64) (bpmnruntime.ProcessInstance, error) {
 	dbInstance, err := rq.Queries.GetProcessInstance(ctx, processInstanceKey)
 	if err != nil {
-		return nil, fmt.Errorf("failed to find process instance by key: %w", err)
+		return nil, fmt.Errorf("failed to find process instance by key: %w", fmt.Errorf("%w: %w", err, storage.ErrNotFound))
 	}
 
 	return rq.inflateProcessInstance(ctx, rq.Queries, dbInstance)
@@ -880,7 +897,7 @@ func (rq *DB) inflateProcessInstance(ctx context.Context, db *sql.Queries, dbIns
 
 	definition, err := rq.FindProcessDefinitionByKey(ctx, dbInstance.ProcessDefinitionKey)
 	if err != nil {
-		return res, fmt.Errorf("failed to find process definition for process instance: %w", err)
+		return res, fmt.Errorf("failed to find process definition for process instance: %w", fmt.Errorf("%w: %w", err, storage.ErrNotFound))
 	}
 
 	var parentToken bpmnruntime.ExecutionToken
@@ -961,7 +978,7 @@ func (rq *DB) FindProcessInstanceByParentExecutionTokenKey(ctx context.Context, 
 		Valid: true,
 	})
 	if err != nil {
-		return res, fmt.Errorf("failed to find process instance by key: %w", err)
+		return res, fmt.Errorf("failed to find process instance by key: %w", fmt.Errorf("%w: %w", err, storage.ErrNotFound))
 	}
 
 	for _, dbInstance := range dbInstances {
@@ -1094,7 +1111,7 @@ var _ storage.TimerStorageReader = &DB{}
 func (rq *DB) GetTimer(ctx context.Context, timerKey int64) (bpmnruntime.Timer, error) {
 	sqlcTimer, err := rq.Queries.GetTimerByKey(ctx, timerKey)
 	if err != nil {
-		return bpmnruntime.Timer{}, err
+		return bpmnruntime.Timer{}, fmt.Errorf("%w: %w", err, storage.ErrNotFound)
 	}
 	timers, err := rq.inflateTimers(ctx, []sql.Timer{sqlcTimer})
 	if err != nil || len(timers) != 1 {
@@ -1109,7 +1126,7 @@ func (rq *DB) FindTokenActiveTimerSubscriptions(ctx context.Context, tokenKey in
 		State:          int64(bpmnruntime.TimerStateCreated),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to find element timers for token %d: %w", tokenKey, err)
+		return nil, fmt.Errorf("failed to find element timers for token %d: %w", tokenKey, fmt.Errorf("%w: %w", err, storage.ErrNotFound))
 	}
 
 	return rq.inflateTimers(ctx, dbTimers)
@@ -1121,7 +1138,7 @@ func (rq *DB) FindProcessInstanceTimers(ctx context.Context, processInstanceKey 
 		State:              int64(state),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to find element timers for process instance %d: %w", processInstanceKey, err)
+		return nil, fmt.Errorf("failed to find element timers for process instance %d: %w", processInstanceKey, fmt.Errorf("%w: %w", err, storage.ErrNotFound))
 	}
 
 	return rq.inflateTimers(ctx, dbTimers)
@@ -1205,17 +1222,17 @@ func SaveTimerWith(ctx context.Context, db *sql.Queries, timer bpmnruntime.Timer
 
 var _ storage.JobStorageReader = &DB{}
 
-func (rq *DB) FindTokenJobsInState(ctx context.Context, tokenKey int64, states []bpmnruntime.ActivityState) ([]bpmnruntime.Job, error) {
+func (rq *DB) GetJobsInStateByTokenKey(ctx context.Context, tokenKey int64, states []bpmnruntime.ActivityState) ([]bpmnruntime.Job, error) {
 	int64States := make([]int64, len(states))
 	for _, s := range states {
 		int64States = append(int64States, int64(s))
 	}
-	dbJobs, err := rq.Queries.FindTokenJobsInState(ctx, sql.FindTokenJobsInStateParams{
+	dbJobs, err := rq.Queries.GetJobsInStateByTokenKey(ctx, sql.GetJobsInStateByTokenKeyParams{
 		ExecutionTokenKey: tokenKey,
 		States:            int64States,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to find pending process instance jobs for execution token key %d: %w", tokenKey, err)
+		return nil, fmt.Errorf("failed to find pending process instance jobs for execution token key %d: %w", tokenKey, fmt.Errorf("%w: %w", err, storage.ErrNotFound))
 	}
 	res := make([]bpmnruntime.Job, len(dbJobs))
 	tokensToLoad := make([]int64, len(dbJobs))
@@ -1264,7 +1281,7 @@ func (rq *DB) FindTokenJobsInState(ctx context.Context, tokenKey int64, states [
 func (rq *DB) FindActiveJobsByType(ctx context.Context, jobType string) ([]bpmnruntime.Job, error) {
 	jobs, err := rq.Queries.FindActiveJobsByType(ctx, jobType)
 	if err != nil {
-		return nil, fmt.Errorf("failed to find active jobs for type %s: %w", jobType, err)
+		return nil, fmt.Errorf("failed to find active jobs for type %s: %w", jobType, fmt.Errorf("%w: %w", err, storage.ErrNotFound))
 	}
 	res := make([]bpmnruntime.Job, len(jobs))
 	tokensToLoad := make([]int64, len(jobs))
@@ -1305,47 +1322,11 @@ token:
 	return res, nil
 }
 
-func (rq *DB) FindJobByElementID(ctx context.Context, processInstanceKey int64, elementID string) (bpmnruntime.Job, error) {
-	var res bpmnruntime.Job
-	job, err := rq.Queries.FindJobByElementId(ctx, sql.FindJobByElementIdParams{
-		ElementID:          elementID,
-		ProcessInstanceKey: processInstanceKey,
-	})
-	if err != nil {
-		return res, fmt.Errorf("failed to find job for elementId %s and process instance key %d: %w", elementID, processInstanceKey, err)
-	}
-	tokens, err := rq.Queries.GetTokens(ctx, []int64{job.ExecutionToken})
-	if err != nil {
-		return res, fmt.Errorf("failed to find job token %d: %w", job.ExecutionToken, err)
-	}
-	if len(tokens) != 1 {
-		return res, fmt.Errorf("failed to find job token %d in the database", job.ExecutionToken)
-	}
-	token := tokens[0]
-	res = bpmnruntime.Job{
-		ElementId:          job.ElementID,
-		ElementInstanceKey: job.ElementInstanceKey,
-		ProcessInstanceKey: job.ProcessInstanceKey,
-		Key:                job.Key,
-		Type:               job.Type,
-		State:              bpmnruntime.ActivityState(job.State),
-		CreatedAt:          time.UnixMilli(job.CreatedAt),
-		Token: bpmnruntime.ExecutionToken{
-			Key:                token.Key,
-			ElementInstanceKey: token.ElementInstanceKey,
-			ElementId:          token.ElementID,
-			ProcessInstanceKey: token.ProcessInstanceKey,
-			State:              bpmnruntime.TokenState(token.State),
-		},
-	}
-	return res, nil
-}
-
 func (rq *DB) FindJobByJobKey(ctx context.Context, jobKey int64) (bpmnruntime.Job, error) {
 	var res bpmnruntime.Job
 	job, err := rq.Queries.FindJobByJobKey(ctx, jobKey)
 	if err != nil {
-		return res, fmt.Errorf("failed to find job with key %d: %w", jobKey, err)
+		return res, fmt.Errorf("failed to find job with key %d: %w", jobKey, fmt.Errorf("%w: %w", err, storage.ErrNotFound))
 	}
 	tokens, err := rq.Queries.GetTokens(ctx, []int64{job.ExecutionToken})
 	if err != nil {
@@ -1387,7 +1368,7 @@ func (rq *DB) FindPendingProcessInstanceJobs(ctx context.Context, processInstanc
 		States:             []int64{int64(bpmnruntime.ActivityStateCompleting), int64(bpmnruntime.ActivityStateActive), int64(bpmnruntime.ActivityStateFailed)},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to find pending process instance jobs for process instance key %d: %w", processInstanceKey, err)
+		return nil, fmt.Errorf("failed to find pending process instance jobs for process instance key %d: %w", processInstanceKey, fmt.Errorf("%w: %w", err, storage.ErrNotFound))
 	}
 	res := make([]bpmnruntime.Job, len(dbJobs))
 	tokensToLoad := make([]int64, len(dbJobs))
@@ -1550,7 +1531,7 @@ func (rq *DB) FindActiveMessageSubscriptionPointer(ctx context.Context, name str
 		FilterState:    int64(bpmnruntime.ActivityStateActive),
 	})
 	if err != nil {
-		return dbMessageSub, fmt.Errorf("failed to find ready message subscription pointer for name %s correlationKey %s: %w", name, correlationKey, err)
+		return dbMessageSub, fmt.Errorf("failed to find ready message subscription pointer for name %s correlationKey %s: %w", name, correlationKey, fmt.Errorf("%w: %w", err, storage.ErrNotFound))
 	}
 
 	return dbMessageSub, nil
@@ -1563,7 +1544,7 @@ func (rq *DB) FindActiveMessageSubscriptionKey(ctx context.Context, name string,
 		State:          int64(bpmnruntime.ActivityStateActive),
 	})
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("%w: %w", err, storage.ErrNotFound)
 	}
 	return dbMessageSub.Key, nil
 }
@@ -1577,7 +1558,7 @@ func (rq *DB) FindTokenMessageSubscriptions(ctx context.Context, tokenKey int64,
 		State:          int64(state),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to find token message subscriptions for token %d: %w", tokenKey, err)
+		return nil, fmt.Errorf("failed to find token message subscriptions for token %d: %w", tokenKey, fmt.Errorf("%w: %w", err, storage.ErrNotFound))
 	}
 	res := make([]bpmnruntime.MessageSubscription, len(dbMessages))
 
@@ -1618,7 +1599,7 @@ func (rq *DB) FindMessageSubscriptionById(ctx context.Context, messageSubscripti
 		State: int64(state),
 	})
 	if err != nil {
-		return res, fmt.Errorf("failed to find active message subscription %d: %w", messageSubscriptionKey, err)
+		return res, fmt.Errorf("failed to find active message subscription %d: %w", messageSubscriptionKey, fmt.Errorf("%w: %w", err, storage.ErrNotFound))
 	}
 	res = bpmnruntime.MessageSubscription{
 		Key:                  dbMessage.Key,
@@ -1656,7 +1637,7 @@ func (rq *DB) FindProcessInstanceMessageSubscriptions(ctx context.Context, proce
 		State:              int64(state),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to find message subscriptions for process %d: %w", processInstanceKey, err)
+		return nil, fmt.Errorf("failed to find message subscriptions for process %d: %w", processInstanceKey, fmt.Errorf("%w: %w", err, storage.ErrNotFound))
 	}
 	res := make([]bpmnruntime.MessageSubscription, len(dbMessages))
 	tokensToLoad := make([]int64, len(dbMessages))
@@ -1715,7 +1696,6 @@ func (rq *DB) SaveMessageSubscription(ctx context.Context, subscription bpmnrunt
 }
 
 func SaveMessageSubscriptionWith(ctx context.Context, db *sql.Queries, subscription bpmnruntime.MessageSubscription) error {
-	fmt.Printf("save message sub %+v", subscription)
 	err := db.SaveMessageSubscription(ctx, sql.SaveMessageSubscriptionParams{
 		Key:                  subscription.GetKey(),
 		ElementID:            subscription.ElementId,
@@ -1742,7 +1722,7 @@ func (rq *DB) GetCompletedTokensForProcessInstance(ctx context.Context, processI
 func (rq *DB) GetTokenByKey(ctx context.Context, key int64) (bpmnruntime.ExecutionToken, error) {
 	token, err := rq.Queries.GetTokens(ctx, []int64{key})
 	if err != nil {
-		return bpmnruntime.ExecutionToken{}, err
+		return bpmnruntime.ExecutionToken{}, fmt.Errorf("%w: %w", err, storage.ErrNotFound)
 	}
 	if len(token) != 1 {
 		return bpmnruntime.ExecutionToken{}, fmt.Errorf("invalid key %d", key)
@@ -2021,10 +2001,12 @@ func FindIncidentByKey(ctx context.Context, db *sql.Queries, key int64) (bpmnrun
 	}
 
 	tokens, err := db.GetTokens(ctx, []int64{incident.ExecutionToken})
+	var token sql.ExecutionToken
 	if len(tokens) == 0 {
 		err = errors.Join(err, errors.New("no incidents found"))
+	} else {
+		token = tokens[0]
 	}
-	token := tokens[0]
 	return bpmnruntime.Incident{
 		Key:                incident.Key,
 		ElementInstanceKey: incident.ElementInstanceKey,
@@ -2046,7 +2028,7 @@ func FindIncidentByKey(ctx context.Context, db *sql.Queries, key int64) (bpmnrun
 			ProcessInstanceKey: token.ProcessInstanceKey,
 			State:              bpmnruntime.TokenState(token.State),
 		},
-	}, nil
+	}, err
 }
 
 func (rq *DB) FindIncidentsByProcessInstanceKey(ctx context.Context, processInstanceKey int64) ([]bpmnruntime.Incident, error) {

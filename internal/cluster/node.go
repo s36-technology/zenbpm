@@ -21,6 +21,7 @@ import (
 	"github.com/pbinitiative/zenbpm/internal/cluster/state"
 	"github.com/pbinitiative/zenbpm/internal/cluster/store"
 	"github.com/pbinitiative/zenbpm/internal/cluster/types"
+	"github.com/pbinitiative/zenbpm/internal/cluster/zenerr"
 	"github.com/pbinitiative/zenbpm/internal/config"
 	"github.com/pbinitiative/zenbpm/internal/log"
 	"github.com/pbinitiative/zenbpm/internal/sql"
@@ -68,6 +69,7 @@ type ZenNode struct {
 	logger     hclog.Logger
 	muxLn      net.Listener
 	JobManager *jobmanager.JobManager
+	idGen      *snowflake.Node
 	// TODO: add tracing to all the methods on ZenNode where it makes sense
 }
 
@@ -78,9 +80,14 @@ type DeployResult struct {
 
 // StartZenNode Starts a cluster node
 func StartZenNode(mainCtx context.Context, conf config.Config) (*ZenNode, error) {
+	idGen, err := snowflake.NewNode(0)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create snowflake id generator: %w", err)
+	}
 	node := &ZenNode{
 		logger: hclog.Default().Named(fmt.Sprintf("zen-node-%s", conf.Cluster.NodeId)),
 		ctx:    mainCtx,
+		idGen:  idGen,
 	}
 
 	mux, muxLn, err := network.NewNodeMux(conf.Cluster.Addr)
@@ -310,8 +317,7 @@ func (node *ZenNode) DeployDmnResourceDefinitionToAllPartitions(ctx context.Cont
 	if key != 0 {
 		return DeployResult{key, true}, err
 	}
-	gen, _ := snowflake.NewNode(0)
-	definitionKey := gen.Generate()
+	definitionKey := node.idGen.Generate()
 	state := node.store.ClusterState()
 	var errJoin error
 	for _, partition := range state.Partitions {
@@ -386,8 +392,7 @@ func (node *ZenNode) DeployProcessDefinitionToAllPartitions(ctx context.Context,
 	if key != 0 {
 		return DeployResult{key, true}, err
 	}
-	gen, _ := snowflake.NewNode(0)
-	definitionKey := gen.Generate()
+	definitionKey := node.idGen.Generate()
 	state := node.store.ClusterState()
 	var errJoin error
 	for _, partition := range state.Partitions {
@@ -411,7 +416,7 @@ func (node *ZenNode) DeployProcessDefinitionToAllPartitions(ctx context.Context,
 		}
 	}
 	if errJoin != nil {
-		return DeployResult{definitionKey.Int64(), false}, errJoin
+		return DeployResult{definitionKey.Int64(), false}, zenerr.ClusterError(errJoin)
 	}
 	return DeployResult{definitionKey.Int64(), false}, nil
 }
@@ -450,6 +455,25 @@ func (node *ZenNode) CompleteJob(ctx context.Context, key int64, variables map[s
 		} else if resp.Error != nil {
 			return fmt.Errorf("%w: %w", e, errors.New(resp.Error.GetMessage()))
 		}
+	}
+	return nil
+}
+
+func (node *ZenNode) AssignJob(ctx context.Context, key int64, assignee string) *zenerr.ZenError {
+	partition := zenflake.GetPartitionId(key)
+	client, err := node.client.PartitionLeader(partition)
+	if err != nil {
+		return zenerr.ClusterError(fmt.Errorf("failed to get client: %w", err))
+	}
+	resp, err := client.AssignJobToAssignee(ctx, &proto.AssignJobToAssigneeRequest{
+		Key:      &key,
+		Assignee: &assignee,
+	})
+	if err != nil {
+		return zenerr.TechnicalError(fmt.Errorf("client call to assign job failed: %w", err))
+	}
+	if resp.Error != nil {
+		return zenerr.ToZenError(resp.Error, fmt.Errorf("client call to assign job failed"))
 	}
 	return nil
 }
@@ -521,7 +545,7 @@ func (node *ZenNode) GetProcessDefinitions(ctx context.Context, bpmnProcessId *s
 	// Get storage for the selected partition
 	db, err := node.GetReadOnlyDB(ctx)
 	if err != nil {
-		return proto.ProcessDefinitionsPage{}, fmt.Errorf("failed to get partition store: %w", err)
+		return proto.ProcessDefinitionsPage{}, zenerr.TechnicalError(fmt.Errorf("failed to get partition store: %w", err))
 	}
 
 	latest := 0
@@ -537,7 +561,7 @@ func (node *ZenNode) GetProcessDefinitions(ctx context.Context, bpmnProcessId *s
 		Limit:               int64(size),
 	})
 	if err != nil {
-		return proto.ProcessDefinitionsPage{}, fmt.Errorf("failed to find process definitions: %w", err)
+		return proto.ProcessDefinitionsPage{}, zenerr.TechnicalError(fmt.Errorf("failed to find process definitions: %w", err))
 	}
 
 	resp := make([]*proto.ProcessDefinition, 0, len(dbDefinitions))
@@ -563,11 +587,14 @@ func (node *ZenNode) GetProcessDefinitions(ctx context.Context, bpmnProcessId *s
 func (node *ZenNode) GetLatestProcessDefinition(ctx context.Context, processId string) (proto.ProcessDefinition, error) {
 	db, err := node.GetReadOnlyDB(ctx)
 	if err != nil {
-		return proto.ProcessDefinition{}, fmt.Errorf("failed to get process definition: %w", err)
+		return proto.ProcessDefinition{}, zenerr.TechnicalError(fmt.Errorf("failed to get node db to get process definition: %w", err))
 	}
 	def, err := db.Queries.FindLatestProcessDefinitionById(ctx, processId)
 	if err != nil {
-		return proto.ProcessDefinition{}, fmt.Errorf("failed to read process definition from database: %w", err)
+		if errors.Is(err, sql.ErrNoRows) {
+			return proto.ProcessDefinition{}, zenerr.NotFound(fmt.Errorf("process definition with id %s not found", processId))
+		}
+		return proto.ProcessDefinition{}, zenerr.TechnicalError(fmt.Errorf("failed to read process definition from database: %w", err))
 	}
 	return proto.ProcessDefinition{
 		Key:        &def.Key,
@@ -581,11 +608,14 @@ func (node *ZenNode) GetLatestProcessDefinition(ctx context.Context, processId s
 func (node *ZenNode) GetProcessDefinition(ctx context.Context, key int64) (proto.ProcessDefinition, error) {
 	db, err := node.GetReadOnlyDB(ctx)
 	if err != nil {
-		return proto.ProcessDefinition{}, fmt.Errorf("failed to get process definition: %w", err)
+		return proto.ProcessDefinition{}, zenerr.TechnicalError(fmt.Errorf("failed to get node db to get process definition: %w", err))
 	}
 	def, err := db.Queries.FindProcessDefinitionByKey(ctx, key)
 	if err != nil {
-		return proto.ProcessDefinition{}, fmt.Errorf("failed to read process definition from database: %w", err)
+		if errors.Is(err, sql.ErrNoRows) {
+			return proto.ProcessDefinition{}, zenerr.NotFound(fmt.Errorf("process definition with key %d not found", key))
+		}
+		return proto.ProcessDefinition{}, zenerr.TechnicalError(fmt.Errorf("failed to read process definition from database: %w", err))
 	}
 	return proto.ProcessDefinition{
 		Key:        &def.Key,
@@ -595,7 +625,83 @@ func (node *ZenNode) GetProcessDefinition(ctx context.Context, key int64) (proto
 	}, nil
 }
 
-func (node *ZenNode) StartCpuProfile(ctx context.Context, nodeId string) error {
+// GetProcessDefinitionElementStatistics will contact follower nodes and return process definition element statistics from all partitions
+func (node *ZenNode) GetProcessDefinitionElementStatistics(ctx context.Context, processDefinitionKey int64) ([]*proto.PartitionedElementStatistics, error) {
+	state := node.store.ClusterState()
+	result := make([]*proto.PartitionedElementStatistics, 0, len(state.Partitions))
+
+	for partitionID := range state.Partitions {
+		follower, err := state.GetPartitionFollower(partitionID)
+		if err != nil {
+			return nil, zenerr.ClusterError(fmt.Errorf("failed to read follower node to get element statistics: %w", err))
+		}
+		client, err := node.client.For(follower.Addr)
+		if err != nil {
+			return nil, zenerr.TechnicalError(fmt.Errorf("failed to get client to get element statistics: %w", err))
+		}
+		resp, err := client.GetProcessDefinitionElementStatistics(ctx, &proto.GetProcessDefinitionElementStatisticsRequest{
+			ProcessDefinitionKey: &processDefinitionKey,
+			Partitions:           []uint32{partitionID},
+		})
+		e := fmt.Errorf("failed to get element statistics from partition %d", partitionID)
+		if resp != nil && resp.Error != nil {
+			return nil, zenerr.ToZenError(resp.Error, e)
+		}
+		if err != nil {
+			return nil, zenerr.TechnicalError(fmt.Errorf("%w: %w", e, err))
+		}
+		result = append(result, resp.Partitions...)
+	}
+	return result, nil
+}
+
+// GetProcessDefinitionStatistics will contact follower nodes and return process definition statistics from all partitions
+func (node *ZenNode) GetProcessDefinitionStatistics(
+	ctx context.Context,
+	page int32,
+	size int32,
+	onlyLatest bool,
+	bpmnProcessIdIn []string,
+	bpmnProcessDefinitionKeyIn []int64,
+	name *string,
+	sort *sql.Sort,
+) ([]*proto.PartitionedProcessDefinitionStatistics, error) {
+	state := node.store.ClusterState()
+	result := make([]*proto.PartitionedProcessDefinitionStatistics, 0, len(state.Partitions))
+
+	for partitionID := range state.Partitions {
+		follower, err := state.GetPartitionFollower(partitionID)
+		if err != nil {
+			return nil, zenerr.ClusterError(fmt.Errorf("failed to read follower node to get process definition statistics: %w", err))
+		}
+		client, err := node.client.For(follower.Addr)
+		if err != nil {
+			return nil, zenerr.TechnicalError(fmt.Errorf("failed to get client to get process definition statistics: %w", err))
+		}
+
+		resp, err := client.GetProcessDefinitionStatistics(ctx, &proto.GetProcessDefinitionStatisticsRequest{
+			Page:                       &page,
+			Size:                       &size,
+			Partitions:                 []uint32{partitionID},
+			OnlyLatest:                 &onlyLatest,
+			BpmnProcessIdIn:            bpmnProcessIdIn,
+			BpmnProcessDefinitionKeyIn: bpmnProcessDefinitionKeyIn,
+			Name:                       name,
+			Sort:                       (*string)(sort),
+		})
+		e := fmt.Errorf("failed to get process definition statistics from partition %d", partitionID)
+		if resp != nil && resp.Error != nil {
+			return nil, zenerr.ToZenError(resp.Error, e)
+		}
+		if err != nil {
+			return nil, zenerr.TechnicalError(fmt.Errorf("%w: %w", e, err))
+		}
+		result = append(result, resp.Partitions...)
+	}
+	return result, nil
+}
+
+func (node *ZenNode) StartPprofServer(ctx context.Context, nodeId string) error {
 	state := node.store.ClusterState()
 	targetNode, err2 := state.GetNode(nodeId)
 	if err2 != nil {
@@ -606,7 +712,7 @@ func (node *ZenNode) StartCpuProfile(ctx context.Context, nodeId string) error {
 		return err
 	}
 
-	resp, err := client.StartCpuProfiler(ctx, &proto.CpuProfilerRequest{})
+	resp, err := client.StartPprofServer(ctx, &proto.PprofServerRequest{})
 	if err != nil || resp.Error != nil {
 		e := fmt.Errorf("failed to start cpu profiler")
 		if err != nil {
@@ -619,28 +725,28 @@ func (node *ZenNode) StartCpuProfile(ctx context.Context, nodeId string) error {
 	return nil
 }
 
-func (node *ZenNode) StopCpuProfile(ctx context.Context, nodeId string) ([]byte, error) {
+func (node *ZenNode) StopPprofServer(ctx context.Context, nodeId string) error {
 	state := node.store.ClusterState()
 	targetNode, err2 := state.GetNode(nodeId)
 	if err2 != nil {
-		return nil, err2
+		return err2
 	}
 	client, err := node.client.For(targetNode.Addr)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	resp, err := client.StopCpuProfiler(ctx, &proto.CpuProfilerRequest{})
+	resp, err := client.StopPprofServer(ctx, &proto.PprofServerRequest{})
 	if err != nil || resp.Error != nil {
-		e := fmt.Errorf("failed to stop cpu profiler")
+		e := fmt.Errorf("failed to stop pprof")
 		if err != nil {
-			return nil, fmt.Errorf("%w: %w", e, err)
+			return fmt.Errorf("%w: %w", e, err)
 		} else if resp.Error != nil {
-			return nil, fmt.Errorf("%w: %w", e, errors.New(resp.Error.GetMessage()))
+			return fmt.Errorf("%w: %w", e, errors.New(resp.Error.GetMessage()))
 		}
 	}
 
-	return resp.Pprof, nil
+	return nil
 }
 
 func (node *ZenNode) CreateInstance(
@@ -653,15 +759,15 @@ func (node *ZenNode) CreateInstance(
 	state := node.store.ClusterState()
 	candidateNode, err := state.GetLeastStressedPartitionLeader()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get node to create process instance: %w", err)
+		return nil, zenerr.ClusterError(fmt.Errorf("failed to get node to create process instance: %w", err))
 	}
 	client, err := node.client.For(candidateNode.Addr)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get client to create process instance: %w", err)
+		return nil, zenerr.TechnicalError(fmt.Errorf("failed to get client to create process instance: %w", err))
 	}
 	vars, err := json.Marshal(variables)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal variables to create process instance: %w", err)
+		return nil, zenerr.BadRequest(fmt.Errorf("failed to marshal variables to create process instance: %w", err))
 	}
 	if timeToLive == nil {
 		if node.controller.Config.Persistence.InstanceHistoryTTL != 0 {
@@ -676,13 +782,11 @@ func (node *ZenNode) CreateInstance(
 		HistoryTTL:  (*int64)(timeToLive),
 		BusinessKey: businessKey,
 	})
-	if err != nil || resp.Error != nil {
-		e := fmt.Errorf("failed to create process instance")
-		if err != nil {
-			return nil, fmt.Errorf("%w: %w", e, err)
-		} else if resp.Error != nil {
-			return nil, fmt.Errorf("%w: %w", e, errors.New(resp.Error.GetMessage()))
-		}
+	if err != nil {
+		return nil, zenerr.TechnicalError(fmt.Errorf("failed to create process instance %w", err))
+	}
+	if resp.Error != nil {
+		return nil, zenerr.ToZenError(resp.Error, fmt.Errorf("failed to create process instance"))
 	}
 	return resp.Process, nil
 }
@@ -696,20 +800,37 @@ func (node *ZenNode) DeleteProcessInstanceVariable(ctx context.Context, processI
 	partition := zenflake.GetPartitionId(processInstanceKey)
 	client, err := node.client.PartitionLeader(partition)
 	if err != nil {
-		return fmt.Errorf("failed to get client to delete process instance variable: %w", err)
+		return zenerr.ClusterError(fmt.Errorf("failed to get client to delete process instance variable: %w", err))
 	}
 
 	resp, err := client.DeleteProcessInstanceVariable(ctx, &proto.DeleteProcessInstanceVariableRequest{
 		ProcessInstanceKey: &processInstanceKey,
 		Variable:           &variable,
 	})
-	if err != nil || resp.Error != nil {
-		e := fmt.Errorf("failed to delete process instance variable")
-		if err != nil {
-			return fmt.Errorf("%w: %w", e, err)
-		} else if resp.Error != nil {
-			return fmt.Errorf("%w: %w", e, errors.New(resp.Error.GetMessage()))
-		}
+	if err != nil {
+		return zenerr.TechnicalError(fmt.Errorf("failed to delete process instance variable %w", err))
+	}
+	if resp.Error != nil {
+		return zenerr.ToZenError(resp.Error, fmt.Errorf("failed to delete process instance variable"))
+	}
+	return nil
+}
+
+func (node *ZenNode) CancelProcessInstance(ctx context.Context, processInstanceKey int64) error {
+	partition := zenflake.GetPartitionId(processInstanceKey)
+	client, err := node.client.PartitionLeader(partition)
+	if err != nil {
+		return zenerr.ClusterError(fmt.Errorf("failed to get client to cancel process instance: %d. %w", processInstanceKey, err))
+	}
+
+	resp, err := client.CancelProcessInstance(ctx, &proto.CancelProcessInstanceRequest{
+		ProcessInstanceKey: &processInstanceKey,
+	})
+	if err != nil {
+		return zenerr.TechnicalError(fmt.Errorf("failed to cancel process instance: %w", err))
+	}
+	if resp.Error != nil {
+		return zenerr.ToZenError(resp.Error, fmt.Errorf("failed to cancel process instance: %s", resp.Error.GetMessage()))
 	}
 	return nil
 }
@@ -718,12 +839,11 @@ func (node *ZenNode) ModifyProcessInstance(ctx context.Context, processInstanceK
 	partition := zenflake.GetPartitionId(processInstanceKey)
 	client, err := node.client.PartitionLeader(partition)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to get client to modify process instance: %w", err)
+		return nil, nil, zenerr.ClusterError(fmt.Errorf("failed to get client to modify process instance: %d. %w", processInstanceKey, err))
 	}
-
 	vars, err := json.Marshal(variables)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to marshal variables to modify process instance: %w", err)
+		return nil, nil, zenerr.BadRequest(fmt.Errorf("failed to marshal variables to modify process instance: %w", err))
 	}
 
 	resp, err := client.ModifyProcessInstance(ctx, &proto.ModifyProcessInstanceRequest{
@@ -732,13 +852,13 @@ func (node *ZenNode) ModifyProcessInstance(ctx context.Context, processInstanceK
 		ElementIdsToStartInstance:     elementIdsToStartInstance,
 		Variables:                     vars,
 	})
-	if err != nil || resp.Error != nil {
-		e := fmt.Errorf("failed to modify process instance")
-		if err != nil {
-			return nil, nil, fmt.Errorf("%w: %w", e, err)
-		} else if resp.Error != nil {
-			return nil, nil, fmt.Errorf("%w: %w", e, errors.New(resp.Error.GetMessage()))
-		}
+	if err != nil {
+		e := fmt.Errorf("failed to modify process instance for processInstanceKey %d %w", processInstanceKey, err)
+		return nil, nil, zenerr.TechnicalError(e)
+	}
+	if resp.Error != nil {
+		e := fmt.Errorf("failed to modify process instance for processInstanceKey %d", processInstanceKey)
+		return nil, nil, zenerr.ToZenError(resp.Error, e)
 	}
 	return resp.Process, resp.ExecutionTokens, nil
 }
@@ -827,20 +947,20 @@ func (node *ZenNode) GetProcessInstances(
 		// TODO: we can smack these into goroutines
 		follower, err := state.GetPartitionFollower(partitionId)
 		if err != nil {
-			return result, fmt.Errorf("failed to get follower node to get process instances: %w", err)
+			return result, zenerr.ClusterError(fmt.Errorf("failed to get follower node to get process instances: %w", err))
 		}
 		client, err := node.client.For(follower.Addr)
 		if err != nil {
-			return result, fmt.Errorf("failed to get client to get process instances: %w", err)
+			return result, zenerr.TechnicalError(fmt.Errorf("failed to get client to get process instances: %w", err))
 		}
 		resp, err := client.GetProcessInstances(ctx, getProcessInstancesRequest)
-		if err != nil || resp.Error != nil {
+		if err != nil {
+			e := fmt.Errorf("failed to get process instances from partition %d %w", partitionId, err)
+			return nil, zenerr.TechnicalError(e)
+		}
+		if resp.Error != nil {
 			e := fmt.Errorf("failed to get process instances from partition %d", partitionId)
-			if err != nil {
-				return nil, fmt.Errorf("%w: %w", e, err)
-			} else if resp.Error != nil {
-				return nil, fmt.Errorf("%w: %w", e, errors.New(resp.Error.GetMessage()))
-			}
+			return nil, zenerr.ToZenError(resp.Error, e)
 		}
 		result = append(result, resp.Partitions...)
 	}
@@ -854,25 +974,60 @@ func (node *ZenNode) GetProcessInstance(ctx context.Context, processInstanceKey 
 	partitionId := zenflake.GetPartitionId(processInstanceKey)
 	follower, err := state.GetPartitionFollower(partitionId)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to get follower node to get process instance: %w", err)
+		return nil, nil, zenerr.ClusterError(fmt.Errorf("failed to get follower node to get process instance: %w", err))
 	}
 	client, err := node.client.For(follower.Addr)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to get client to get process instance: %w", err)
+		return nil, nil, zenerr.TechnicalError(fmt.Errorf("failed to get client to get process instance: %w", err))
 	}
 	resp, err := client.GetProcessInstance(ctx, &proto.GetProcessInstanceRequest{
 		ProcessInstanceKey: &processInstanceKey,
 	})
-	if err != nil || resp.Error != nil {
+	if err != nil {
+		e := fmt.Errorf("failed to get process instance from partition %d %w", partitionId, err)
+		return nil, nil, zenerr.TechnicalError(e)
+	}
+	if resp.Error != nil {
 		e := fmt.Errorf("failed to get process instance from partition %d", partitionId)
-		if err != nil {
-			return nil, nil, fmt.Errorf("%w: %w", e, err)
-		} else if resp.Error != nil {
-			return nil, nil, fmt.Errorf("%w: %w", e, errors.New(resp.Error.GetMessage()))
-		}
+		return nil, nil, zenerr.ToZenError(resp.Error, e)
 	}
 
 	return resp.Processes, resp.ExecutionTokens, nil
+}
+
+// GetChildProcessInstances will contact follower nodes and return instances in partitions they are following
+func (node *ZenNode) GetChildProcessInstances(
+	ctx context.Context,
+	request *proto.GetChildProcessInstancesRequest,
+) ([]*proto.PartitionedProcessInstances, error) {
+	state := node.store.ClusterState()
+	result := make([]*proto.PartitionedProcessInstances, 0, len(state.Partitions))
+	partitionId := zenflake.GetPartitionId(*request.ParentInstanceKey)
+	follower, err := state.GetPartitionFollower(partitionId)
+	if err != nil {
+		return nil, zenerr.ClusterError(fmt.Errorf("failed to get follower node to get child process instances: %w", err))
+	}
+	client, err := node.client.For(follower.Addr)
+	if err != nil {
+		return nil, zenerr.TechnicalError(fmt.Errorf("failed to get client to get child process instances: %w", err))
+	}
+
+	resp, err := client.GetChildProcessInstances(ctx, request)
+	if err != nil || resp.Error != nil {
+		e := fmt.Errorf("failed to get child process instances from partition %d", partitionId)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %w", e, err)
+		} else if resp.Error != nil {
+			return nil, fmt.Errorf("%w: %w", e, errors.New(resp.Error.GetMessage()))
+		}
+	}
+	result = append(result, &proto.PartitionedProcessInstances{
+		PartitionId: &partitionId,
+		Instances:   resp.Instances,
+		TotalCount:  resp.TotalCount,
+	})
+
+	return result, nil
 }
 
 func (node *ZenNode) GetDecisionInstance(ctx context.Context, decisionInstanceKey int64) (*proto.DecisionInstance, error) {
@@ -940,24 +1095,24 @@ func (node *ZenNode) GetProcessInstanceJobs(ctx context.Context, page int32, siz
 	partitionId := zenflake.GetPartitionId(processInstanceKey)
 	follower, err := state.GetPartitionFollower(partitionId)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get follower node to get process instance: %w", err)
+		return nil, zenerr.ClusterError(fmt.Errorf("failed to get follower node to get process instance jobs: %w", err))
 	}
 	client, err := node.client.For(follower.Addr)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get client to get process instance: %w", err)
+		return nil, zenerr.TechnicalError(fmt.Errorf("failed to get client to get process instance jobs: %w", err))
 	}
 	resp, err := client.GetProcessInstanceJobs(ctx, &proto.GetProcessInstanceJobsRequest{
 		ProcessInstanceKey: &processInstanceKey,
 		Page:               &page,
 		Size:               &size,
 	})
-	if err != nil || resp.Error != nil {
+	if err != nil {
+		e := fmt.Errorf("failed to get process instance jobs from partition %d %w", partitionId, err)
+		return nil, zenerr.TechnicalError(e)
+	}
+	if resp.Error != nil {
 		e := fmt.Errorf("failed to get process instance jobs from partition %d", partitionId)
-		if err != nil {
-			return nil, fmt.Errorf("%w: %w", e, err)
-		} else if resp.Error != nil {
-			return nil, fmt.Errorf("%w: %w", e, errors.New(resp.Error.GetMessage()))
-		}
+		return nil, zenerr.ToZenError(resp.Error, e)
 	}
 	return resp, nil
 }
@@ -968,24 +1123,24 @@ func (node *ZenNode) GetFlowElementHistory(ctx context.Context, page int32, size
 	partitionId := zenflake.GetPartitionId(processInstanceKey)
 	follower, err := state.GetPartitionFollower(partitionId)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get follower node to get process instance: %w", err)
+		return nil, zenerr.ClusterError(fmt.Errorf("failed to get follower node to get flow element history: %w", err))
 	}
 	client, err := node.client.For(follower.Addr)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get client to get process instance: %w", err)
+		return nil, zenerr.TechnicalError(fmt.Errorf("failed to get client to get flow element history: %w", err))
 	}
 	resp, err := client.GetFlowElementHistory(ctx, &proto.GetFlowElementHistoryRequest{
 		ProcessInstanceKey: &processInstanceKey,
 		Page:               &page,
 		Size:               &size,
 	})
-	if err != nil || resp.Error != nil {
+	if err != nil {
+		e := fmt.Errorf("failed to get process instance flow element history from partition %d %w", partitionId, err)
+		return nil, zenerr.TechnicalError(e)
+	}
+	if resp.Error != nil {
 		e := fmt.Errorf("failed to get process instance flow element history from partition %d", partitionId)
-		if err != nil {
-			return nil, fmt.Errorf("%w: %w", e, err)
-		} else if resp.Error != nil {
-			return nil, fmt.Errorf("%w: %w", e, errors.New(resp.Error.GetMessage()))
-		}
+		return nil, zenerr.ToZenError(resp.Error, e)
 	}
 	return resp, nil
 }
@@ -996,11 +1151,11 @@ func (node *ZenNode) GetIncidents(ctx context.Context, page int32, size int32, p
 	partitionId := zenflake.GetPartitionId(processInstanceKey)
 	follower, err := clusterState.GetPartitionFollower(partitionId)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get follower node to get process instance: %w", err)
+		return nil, zenerr.ClusterError(fmt.Errorf("failed to get follower node to get incidents: %w", err))
 	}
 	client, err := node.client.For(follower.Addr)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get client to get process instance: %w", err)
+		return nil, zenerr.TechnicalError(fmt.Errorf("failed to get client to get incidents: %w", err))
 	}
 
 	req := &proto.GetIncidentsRequest{
@@ -1013,13 +1168,13 @@ func (node *ZenNode) GetIncidents(ctx context.Context, page int32, size int32, p
 	}
 
 	resp, err := client.GetIncidents(ctx, req)
-	if err != nil || resp.Error != nil {
+	if err != nil {
+		e := fmt.Errorf("failed to get incidents from partition %d %w", partitionId, err)
+		return nil, zenerr.TechnicalError(e)
+	}
+	if resp.Error != nil {
 		e := fmt.Errorf("failed to get incidents from partition %d", partitionId)
-		if err != nil {
-			return nil, fmt.Errorf("%w: %w", e, err)
-		} else if resp.Error != nil {
-			return nil, fmt.Errorf("%w: %w", e, errors.New(resp.Error.GetMessage()))
-		}
+		return nil, zenerr.ToZenError(resp.Error, e)
 	}
 	return resp, nil
 }
@@ -1035,15 +1190,15 @@ func (node *ZenNode) StartProcessInstanceOnElements(ctx context.Context, process
 	state := node.store.ClusterState()
 	candidateNode, err := state.GetLeastStressedPartitionLeader()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get node to start process instance: %w", err)
+		return nil, zenerr.ClusterError(fmt.Errorf("failed to get node to start process instance on elements: %w", err))
 	}
 	client, err := node.client.For(candidateNode.Addr)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get client to start process instance: %w", err)
+		return nil, zenerr.TechnicalError(fmt.Errorf("failed to get client to start process instance on elements: %w", err))
 	}
 	vars, err := json.Marshal(variables)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal variables to start process instance: %w", err)
+		return nil, zenerr.BadRequest(fmt.Errorf("failed to marshal variables to start process instance on elements: %w", err))
 	}
 	resp, err := client.StartProcessInstanceOnElements(ctx, &proto.StartInstanceOnElementIdsRequest{
 		DefinitionKey:      &processDefinitionKey,
@@ -1051,10 +1206,10 @@ func (node *ZenNode) StartProcessInstanceOnElements(ctx context.Context, process
 		Variables:          vars,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to start process instance: %w", err)
+		return nil, zenerr.TechnicalError(fmt.Errorf("failed to start process instance on elements: %w", err))
 	}
 	if resp.Error != nil {
-		return nil, fmt.Errorf("failed to start process instance: %s", resp.Error.GetMessage())
+		return nil, zenerr.ToZenError(resp.Error, fmt.Errorf("failed to start process instance on elements"))
 	}
 	return resp.Process, nil
 }
@@ -1071,7 +1226,7 @@ func (node *ZenNode) LoadJobsToDistribute(jobTypes []string, idsToSkip []int64, 
 		idsToSkip = []int64{0}
 	}
 	for _, db := range databases {
-		jobs, err := db.Queries.FindWaitingJobs(node.ctx, sql.FindWaitingJobsParams{
+		jobs, err := db.Queries.GetWaitingJobs(node.ctx, sql.GetWaitingJobsParams{
 			KeySkip: idsToSkip,
 			Type:    jobTypes,
 			Limit:   count,
@@ -1095,6 +1250,15 @@ func (node *ZenNode) JobCompleteByKey(ctx context.Context, jobKey int64, variabl
 		return err
 	}
 	return nil
+}
+
+func (node *ZenNode) JobAssignByKey(ctx context.Context, jobKey int64, assignee *string) error {
+	partitionId := zenflake.GetPartitionId(jobKey)
+	engine := node.controller.PartitionEngine(ctx, partitionId)
+	if engine == nil {
+		return fmt.Errorf("engine to assign job was not found on the node")
+	}
+	return engine.JobAssignByKey(ctx, jobKey, assignee)
 }
 
 func (node *ZenNode) JobFailByKey(ctx context.Context, jobKey int64, message string, errorCode *string, variables map[string]any) error {

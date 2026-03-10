@@ -45,8 +45,8 @@ service ZenService {
   rpc PartitionBackup(PartitionBackupRequest) returns (PartitionBackupResponse);
   rpc PartitionRestore(PartitionRestoreRequest)
       returns (PartitionRestoreResponse);
-  rpc StartCpuProfiler(CpuProfilerRequest) returns (CpuProfilerStartResult);
-  rpc StopCpuProfiler(CpuProfilerRequest) returns (CpuProfilerStopResult);
+  rpc StartPprofServer(PprofServerRequest) returns (PprofServerStartResult);
+  rpc StopPprofServer(PprofServerRequest) returns (PprofServerStopResult);
 
   rpc NodeCommand(zencommand.Command) returns (NodeCommandResponse);
 
@@ -64,13 +64,15 @@ service ZenService {
   rpc StartProcessInstanceOnElements(StartInstanceOnElementIdsRequest) returns (StartInstanceOnElementIdsResponse);
   rpc ModifyProcessInstance(ModifyProcessInstanceRequest) returns (ModifyProcessInstanceResponse);
   rpc DeleteProcessInstanceVariable(DeleteProcessInstanceVariableRequest) returns (DeleteProcessInstanceVariableResponse);
+  rpc CancelProcessInstance(CancelProcessInstanceRequest) returns (CancelProcessInstanceResponse);
   rpc GetProcessInstances(GetProcessInstancesRequest) returns (GetProcessInstancesResponse);
+  rpc GetChildProcessInstances(GetChildProcessInstancesRequest) returns (GetChildProcessInstancesResponse);
+  rpc GetProcessInstance(GetProcessInstanceRequest) returns (GetProcessInstanceResponse);
+  rpc GetProcessInstanceJobs(GetProcessInstanceJobsRequest) returns (GetProcessInstanceJobsResponse);
   rpc GetDecisionInstance(GetDecisionInstanceRequest) returns (GetDecisionInstanceResponse);
   rpc GetDecisionInstances(GetDecisionInstancesRequest) returns (GetDecisionInstancesResponse);
   rpc GetJobs(GetJobsRequest) returns (GetJobsResponse);
   rpc GetJob(GetJobRequest) returns (GetJobResponse);
-  rpc GetProcessInstance(GetProcessInstanceRequest) returns (GetProcessInstanceResponse);
-  rpc GetProcessInstanceJobs(GetProcessInstanceJobsRequest) returns (GetProcessInstanceJobsResponse);
   rpc GetFlowElementHistory(GetFlowElementHistoryRequest) returns (GetFlowElementHistoryResponse);
   rpc GetIncidents(GetIncidentsRequest) returns (GetIncidentsResponse);
   rpc ResolveIncident(ResolveIncidentRequest) returns (ResolveIncidentResponse);
@@ -80,6 +82,9 @@ service ZenService {
   rpc FailJob(FailJobRequest) returns (FailJobResponse);
   // Used by client to let server know that the job needs to be reassigned to another node
   rpc ReassignJob(ReassignJobRequest) returns (ReassignJobResponse);
+  rpc AssignJobToAssignee(AssignJobToAssigneeRequest) returns (AssignJobToAssigneeResponse);
+  rpc GetProcessDefinitionStatistics(GetProcessDefinitionStatisticsRequest) returns (GetProcessDefinitionStatisticsResponse);
+  rpc GetProcessDefinitionElementStatistics(GetProcessDefinitionElementStatisticsRequest) returns (GetProcessDefinitionElementStatisticsResponse);
 }
 
 // TODO: do we want to keep custom error struct or use the default error handling?
@@ -229,7 +234,7 @@ message ProcessDefinition {
 
 message ProcessDefinitionsPage {
   repeated ProcessDefinition  items = 1;
-  int32 totalCount = 2;
+  int32 total_count = 2;
 }
 
 message ProcessInstance {
@@ -239,8 +244,10 @@ message ProcessInstance {
   int64 state = 4;
   int64 created_at = 5;
   int64 definition_key = 6;
-  int64 parent_key = 7;
-  string business_key = 8;
+  int64 parent_instance_key = 7;
+  int64 parent_token_key = 8;
+  string business_key = 9;
+  int64 type = 10;
 }
 
 message DecisionInstance {
@@ -431,6 +438,10 @@ message DeleteProcessInstanceVariableRequest {
   string variable = 2;
 }
 
+message CancelProcessInstanceRequest {
+  int64 process_instance_key = 1;
+}
+
 message ModifyProcessInstanceResponse {
   ErrorResult error = 1;
   ProcessInstance process = 2;
@@ -440,6 +451,18 @@ message ModifyProcessInstanceResponse {
 message DeleteProcessInstanceVariableResponse {
   ErrorResult error = 1;
   ProcessInstance process = 2;
+}
+
+message CancelProcessInstanceResponse {
+  ErrorResult error = 1;
+}
+
+message GetChildProcessInstancesRequest{
+  int32 page = 1;
+  int32 size = 2;
+  int64 parent_instance_key = 3;
+  int64 state = 4;
+  string sort_by_order = 5;
 }
 
 message GetProcessInstancesRequest {
@@ -453,7 +476,9 @@ message GetProcessInstancesRequest {
   int64 created_from = 8;
   int64 created_to = 9;
   int64 state = 10;
-  string sort_by_order = 11;
+  bool show_child_processes = 11;
+  string activity_id = 12;
+  string sort_by_order = 13;
 }
 
 message GetDecisionInstanceRequest {
@@ -483,24 +508,30 @@ message GetDmnResourceDefinitionsRequest {
 
 message DmnResourceDefinitionsPage {
   repeated DmnResourceDefinition items = 1;
-  int32 totalCount = 2;
+  int32 total_count = 2;
 }
 
 message PartitionedProcessInstances {
   uint32 partition_id = 1;
   repeated ProcessInstance instances = 2;
-  int32 totalCount = 3;
+  int32 total_count = 3;
 }
 
 message PartitionedDecisionInstances {
   uint32 partition_id = 1;
   repeated DecisionInstance decisionInstances = 2;
-  int32 totalCount = 3;
+  int32 total_count = 3;
 }
 
 message GetProcessInstancesResponse {
   ErrorResult error = 1;
   repeated PartitionedProcessInstances partitions = 2;
+}
+
+message GetChildProcessInstancesResponse {
+  ErrorResult error = 1;
+  repeated ProcessInstance instances = 2;
+  int32 total_count = 3;
 }
 
 message GetDecisionInstancesResponse {
@@ -532,7 +563,7 @@ message GetProcessInstanceJobsRequest {
 message GetProcessInstanceJobsResponse {
   ErrorResult error = 1;
   repeated Job jobs = 2;
-  int32 totalCount = 3;
+  int32 total_count = 3;
 }
 
 message GetFlowElementHistoryRequest {
@@ -544,7 +575,7 @@ message GetFlowElementHistoryRequest {
 message GetFlowElementHistoryResponse {
   ErrorResult error = 1;
   repeated FlowElement flow = 2;
-  int32 totalCount = 3;
+  int32 total_count = 3;
 }
 
 message GetIncidentsRequest {
@@ -557,7 +588,7 @@ message GetIncidentsRequest {
 message GetIncidentsResponse {
   ErrorResult error = 1;
   repeated Incident incidents = 2;
-  int32 totalCount = 3;
+  int32 total_count = 3;
 }
 
 message GetJobsRequest {
@@ -583,7 +614,7 @@ message GetJobResponse {
 message PartitionedJobs {
   uint32 partition_id = 1;
   repeated Job jobs = 2;
-  int32 totalCount = 3;
+  int32 total_count = 3;
 }
 
 message GetJobsResponse {
@@ -625,15 +656,82 @@ message ReassignJobResponse {
   ErrorResult error = 1;
 }
 
-message CpuProfilerRequest {}
+message AssignJobToAssigneeRequest {
+  int64 key = 1;
+  string assignee = 2;
+}
 
-message CpuProfilerStartResult {
+message AssignJobToAssigneeResponse {
   ErrorResult error = 1;
 }
 
-message CpuProfilerStopResult {
+message GetProcessDefinitionElementStatisticsRequest {
+  int64 process_definition_key = 1;
+  repeated uint32 partitions = 2;
+}
+
+message PprofServerRequest {}
+
+message ElementStatisticEntry {
+  string element_id = 1;
+  int32 active_count = 2;
+  int32 incident_count = 3;
+}
+
+message PartitionedElementStatistics {
+  uint32 partition_id = 1;
+  repeated ElementStatisticEntry statistics = 2;
+}
+
+message GetProcessDefinitionElementStatisticsResponse {
   ErrorResult error = 1;
-  bytes pprof = 2;
+  repeated PartitionedElementStatistics partitions = 2;
+}
+
+message GetProcessDefinitionStatisticsRequest {
+  int32 page = 1;
+  int32 size = 2;
+  repeated uint32 partitions = 3;
+  bool only_latest = 4;
+  repeated string bpmn_process_id_in = 5;
+  repeated int64 bpmn_process_definition_key_in = 6;
+  string name = 7;
+  string sort = 8;
+}
+
+message ProcessDefinitionStatistics {
+  int64 key = 1;
+  int32 version = 2;
+  string bpmn_process_id = 3;
+  string bpmn_process_name = 4;
+  InstanceCounts instance_counts = 5;
+}
+
+message InstanceCounts {
+  int64 total = 1;
+  int64 active = 2;
+  int64 completed = 3;
+  int64 terminated = 4;
+  int64 failed = 5;
+}
+
+message PartitionedProcessDefinitionStatistics {
+  uint32 partition_id = 1;
+  repeated ProcessDefinitionStatistics statistics = 2;
+  int32 total_count = 3;
+}
+
+message GetProcessDefinitionStatisticsResponse {
+  ErrorResult error = 1;
+  repeated PartitionedProcessDefinitionStatistics partitions = 2;
+}
+
+message PprofServerStartResult {
+  ErrorResult error = 1;
+}
+
+message PprofServerStopResult {
+  ErrorResult error = 1;
 }
 
 // INTERNAL ENGINE API END

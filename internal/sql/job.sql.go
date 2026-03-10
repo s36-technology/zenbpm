@@ -138,39 +138,6 @@ func (q *Queries) FindAllJobs(ctx context.Context, arg FindAllJobsParams) ([]Job
 	return items, nil
 }
 
-const findJobByElementId = `-- name: FindJobByElementId :one
-SELECT
-    "key", element_instance_key, element_id, process_instance_key, type, state, created_at, variables, execution_token, assignee
-FROM
-    job
-WHERE
-    element_id = ?1
-    AND process_instance_key = ?2
-`
-
-type FindJobByElementIdParams struct {
-	ElementID          string `json:"element_id"`
-	ProcessInstanceKey int64  `json:"process_instance_key"`
-}
-
-func (q *Queries) FindJobByElementId(ctx context.Context, arg FindJobByElementIdParams) (Job, error) {
-	row := q.db.QueryRowContext(ctx, findJobByElementId, arg.ElementID, arg.ProcessInstanceKey)
-	var i Job
-	err := row.Scan(
-		&i.Key,
-		&i.ElementInstanceKey,
-		&i.ElementID,
-		&i.ProcessInstanceKey,
-		&i.Type,
-		&i.State,
-		&i.CreatedAt,
-		&i.Variables,
-		&i.ExecutionToken,
-		&i.Assignee,
-	)
-	return i, err
-}
-
 const findJobByJobKey = `-- name: FindJobByJobKey :one
 SELECT
     "key", element_instance_key, element_id, process_instance_key, type, state, created_at, variables, execution_token, assignee
@@ -447,7 +414,7 @@ func (q *Queries) FindProcessInstanceJobsInState(ctx context.Context, arg FindPr
 	return items, nil
 }
 
-const findTokenJobsInState = `-- name: FindTokenJobsInState :many
+const getJobsInStateByTokenKey = `-- name: GetJobsInStateByTokenKey :many
 
 SELECT
     "key", element_instance_key, element_id, process_instance_key, type, state, created_at, variables, execution_token, assignee
@@ -458,14 +425,14 @@ WHERE
     AND state IN (/*SLICE:states*/?)
 `
 
-type FindTokenJobsInStateParams struct {
+type GetJobsInStateByTokenKeyParams struct {
 	ExecutionTokenKey int64   `json:"execution_token_key"`
 	States            []int64 `json:"states"`
 }
 
 // https://github.com/sqlc-dev/sqlc/issues/2452
-func (q *Queries) FindTokenJobsInState(ctx context.Context, arg FindTokenJobsInStateParams) ([]Job, error) {
-	query := findTokenJobsInState
+func (q *Queries) GetJobsInStateByTokenKey(ctx context.Context, arg GetJobsInStateByTokenKeyParams) ([]Job, error) {
+	query := getJobsInStateByTokenKey
 	var queryParams []interface{}
 	queryParams = append(queryParams, arg.ExecutionTokenKey)
 	if len(arg.States) > 0 {
@@ -509,37 +476,29 @@ func (q *Queries) FindTokenJobsInState(ctx context.Context, arg FindTokenJobsInS
 	return items, nil
 }
 
-const findWaitingJobs = `-- name: FindWaitingJobs :many
+const getWaitingJobs = `-- name: GetWaitingJobs :many
 SELECT
     "key", element_instance_key, element_id, process_instance_key, type, state, created_at, variables, execution_token, assignee
 FROM
     job
 WHERE
     state = 1
-    AND key NOT IN (/*SLICE:key_skip*/?)
     AND type IN (/*SLICE:type*/?)
+    AND key NOT IN (/*SLICE:key_skip*/?)
 ORDER BY
     created_at ASC
 LIMIT ?
 `
 
-type FindWaitingJobsParams struct {
-	KeySkip []int64  `json:"key_skip"`
+type GetWaitingJobsParams struct {
 	Type    []string `json:"type"`
+	KeySkip []int64  `json:"key_skip"`
 	Limit   int64    `json:"limit"`
 }
 
-func (q *Queries) FindWaitingJobs(ctx context.Context, arg FindWaitingJobsParams) ([]Job, error) {
-	query := findWaitingJobs
+func (q *Queries) GetWaitingJobs(ctx context.Context, arg GetWaitingJobsParams) ([]Job, error) {
+	query := getWaitingJobs
 	var queryParams []interface{}
-	if len(arg.KeySkip) > 0 {
-		for _, v := range arg.KeySkip {
-			queryParams = append(queryParams, v)
-		}
-		query = strings.Replace(query, "/*SLICE:key_skip*/?", strings.Repeat(",?", len(arg.KeySkip))[1:], 1)
-	} else {
-		query = strings.Replace(query, "/*SLICE:key_skip*/?", "NULL", 1)
-	}
 	if len(arg.Type) > 0 {
 		for _, v := range arg.Type {
 			queryParams = append(queryParams, v)
@@ -547,6 +506,14 @@ func (q *Queries) FindWaitingJobs(ctx context.Context, arg FindWaitingJobsParams
 		query = strings.Replace(query, "/*SLICE:type*/?", strings.Repeat(",?", len(arg.Type))[1:], 1)
 	} else {
 		query = strings.Replace(query, "/*SLICE:type*/?", "NULL", 1)
+	}
+	if len(arg.KeySkip) > 0 {
+		for _, v := range arg.KeySkip {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:key_skip*/?", strings.Repeat(",?", len(arg.KeySkip))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:key_skip*/?", "NULL", 1)
 	}
 	queryParams = append(queryParams, arg.Limit)
 	rows, err := q.db.QueryContext(ctx, query, queryParams...)

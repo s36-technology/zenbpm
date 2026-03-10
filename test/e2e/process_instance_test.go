@@ -52,7 +52,37 @@ func TestRestApiProcessInstance(t *testing.T) {
 	})
 }
 
+func TestCancelProcessInstance(t *testing.T) {
+	var instance public.ProcessInstance
+	definition, err := deployGetDefinition(t, "service-task-input-output.bpmn", "service-task-input-output")
+
+	t.Run("create process instance", func(t *testing.T) {
+		instance, err = createProcessInstance(t, definition.Key, map[string]any{
+			"testVar": 123,
+		})
+		assert.NoError(t, err)
+		assert.NotEmpty(t, instance.Key)
+	})
+	t.Run("read instance, state is active", func(t *testing.T) {
+		fetchedInstance, err := getProcessInstance(t, instance.Key)
+		assert.NoError(t, err)
+		assert.Equal(t, public.ProcessInstanceStateActive, fetchedInstance.State)
+	})
+	t.Run("cancel process instance", func(t *testing.T) {
+		cancelResponse, err := app.restClient.CancelProcessInstanceWithResponse(t.Context(), instance.Key)
+		assert.NoError(t, err)
+		assert.Equal(t, 204, cancelResponse.StatusCode())
+	})
+	t.Run("read instance, state is terminated", func(t *testing.T) {
+		fetchedInstance, err := getProcessInstance(t, instance.Key)
+		assert.NoError(t, err)
+		assert.Equal(t, public.ProcessInstanceStateTerminated, fetchedInstance.State)
+	})
+}
+
 func TestRestApiParentProcessInstance(t *testing.T) {
+	cleanProcessInstances(t)
+
 	var instance public.ProcessInstance
 	definition, err := deployGetDefinition(t, "call-activity-simple.bpmn", "Simple_CallActivity_Process")
 	assert.NoError(t, err)
@@ -61,7 +91,7 @@ func TestRestApiParentProcessInstance(t *testing.T) {
 
 	t.Run("create process instance", func(t *testing.T) {
 		instance, err = createProcessInstance(t, definition.Key, map[string]any{
-			"testVar": 123,
+			"variable_name": 123,
 		})
 		assert.NoError(t, err)
 		assert.NotEmpty(t, instance.Key)
@@ -296,6 +326,153 @@ func TestState(t *testing.T) {
 	})
 }
 
+func TestIncludeChildProcesses(t *testing.T) {
+	cleanProcessInstances(t)
+
+	multiInstanceDefinition, err := deployGetUniqueDefinition(t, "multi_instance_service_task.bpmn")
+	assert.NoError(t, err)
+
+	callActivityDefinition, err := deployGetUniqueDefinition(t, "call-activity-simple.bpmn")
+	assert.NoError(t, err)
+	err = deployDefinition(t, "simple_task.bpmn")
+	assert.NoError(t, err)
+
+	subprocessDefinition, err := deployGetUniqueDefinition(t, "simple_sub_process_task.bpmn")
+	assert.NoError(t, err)
+
+	t.Run("create process instances", func(t *testing.T) {
+		instance1, err := createProcessInstance(t, multiInstanceDefinition.Key, map[string]any{
+			"testInputCollection": []string{"test1", "test2", "test3"},
+		})
+		assert.NoError(t, err)
+		assert.NotEmpty(t, instance1.Key)
+
+		instance2, err := createProcessInstance(t, callActivityDefinition.Key, map[string]any{
+			"testVar": 123,
+		})
+		assert.NoError(t, err)
+		assert.NotEmpty(t, instance2.Key)
+
+		instance3, err := createProcessInstance(t, subprocessDefinition.Key, map[string]any{
+			"variable_name": 123,
+		})
+		assert.NoError(t, err)
+		assert.NotEmpty(t, instance3.Key)
+	})
+
+	time.Sleep(500 * time.Millisecond)
+
+	t.Run("find process instances by IncludeChildProcesses=true", func(t *testing.T) {
+		processInstances, err := app.restClient.GetProcessInstancesWithResponse(t.Context(), &zenclient.GetProcessInstancesParams{
+			IncludeChildProcesses: ptr.To(true),
+			State:                 ptr.To(zenclient.GetProcessInstancesParamsState("active")),
+		})
+		assert.NoError(t, err)
+		assert.Equal(t, 6, processInstances.JSON200.TotalCount)
+		assert.Equal(t, 1, len(processInstances.JSON200.Partitions))
+		for _, instance := range processInstances.JSON200.Partitions[0].Items {
+			assert.Contains(t, []zenclient.ProcessInstanceProcessType{"default", "callActivity", "multiInstance", "subprocess"}, instance.ProcessType)
+		}
+	})
+
+	t.Run("find process instances by IncludeChildProcesses=false", func(t *testing.T) {
+		processInstances, err := app.restClient.GetProcessInstancesWithResponse(t.Context(), &zenclient.GetProcessInstancesParams{
+			IncludeChildProcesses: ptr.To(false),
+			State:                 ptr.To(zenclient.GetProcessInstancesParamsState("active")),
+		})
+		assert.NoError(t, err)
+		assert.Equal(t, 4, processInstances.JSON200.TotalCount)
+		assert.Equal(t, 1, len(processInstances.JSON200.Partitions))
+		for _, instance := range processInstances.JSON200.Partitions[0].Items {
+			assert.Contains(t, []zenclient.ProcessInstanceProcessType{"default", "callActivity"}, instance.ProcessType)
+		}
+	})
+
+	t.Run("find process instances by IncludeChildProcesses not filled out", func(t *testing.T) {
+		processInstances, err := app.restClient.GetProcessInstancesWithResponse(t.Context(), &zenclient.GetProcessInstancesParams{
+			State: ptr.To(zenclient.GetProcessInstancesParamsState("active")),
+		})
+		assert.NoError(t, err)
+		assert.Equal(t, 4, processInstances.JSON200.TotalCount)
+		assert.Equal(t, 1, len(processInstances.JSON200.Partitions))
+		for _, instance := range processInstances.JSON200.Partitions[0].Items {
+			assert.Contains(t, []zenclient.ProcessInstanceProcessType{"default", "callActivity"}, instance.ProcessType)
+		}
+	})
+	assert.NoError(t, err)
+}
+
+func TestFindChildProcesses(t *testing.T) {
+	cleanProcessInstances(t)
+
+	multiInstanceDefinition, err := deployGetUniqueDefinition(t, "multi_instance_service_task.bpmn")
+	assert.NoError(t, err)
+
+	callActivityDefinition, err := deployGetUniqueDefinition(t, "call-activity-simple.bpmn")
+	assert.NoError(t, err)
+	err = deployDefinition(t, "simple_task.bpmn")
+	assert.NoError(t, err)
+
+	subprocessDefinition, err := deployGetUniqueDefinition(t, "simple_sub_process_task.bpmn")
+	assert.NoError(t, err)
+
+	var instance1Key int64
+	var instance2Key int64
+	var instance3Key int64
+	t.Run("create process instances", func(t *testing.T) {
+		instance1, err := createProcessInstance(t, multiInstanceDefinition.Key, map[string]any{
+			"testInputCollection": []string{"test1", "test2", "test3"},
+		})
+		assert.NoError(t, err)
+		assert.NotEmpty(t, instance1.Key)
+		instance1Key = instance1.Key
+
+		instance2, err := createProcessInstance(t, callActivityDefinition.Key, map[string]any{
+			"testVar": 123,
+		})
+		assert.NoError(t, err)
+		assert.NotEmpty(t, instance2.Key)
+		instance2Key = instance2.Key
+
+		instance3, err := createProcessInstance(t, subprocessDefinition.Key, map[string]any{
+			"variable_name": 123,
+		})
+		assert.NoError(t, err)
+		assert.NotEmpty(t, instance3.Key)
+		instance3Key = instance3.Key
+	})
+
+	time.Sleep(500 * time.Millisecond)
+
+	t.Run("find child process instances multiInstance", func(t *testing.T) {
+		processInstances, err := app.restClient.GetChildProcessInstancesWithResponse(t.Context(), instance1Key, &zenclient.GetChildProcessInstancesParams{})
+		assert.NoError(t, err)
+		assert.Equal(t, 1, processInstances.JSON200.TotalCount)
+		assert.Equal(t, 1, len(processInstances.JSON200.Partitions))
+		assert.Equal(t, 1, len(processInstances.JSON200.Partitions[0].Items))
+		assert.Equal(t, zenclient.ProcessInstanceProcessType("multiInstance"), processInstances.JSON200.Partitions[0].Items[0].ProcessType)
+	})
+
+	t.Run("find child process instances callActivity", func(t *testing.T) {
+		processInstances, err := app.restClient.GetChildProcessInstancesWithResponse(t.Context(), instance2Key, &zenclient.GetChildProcessInstancesParams{})
+		assert.NoError(t, err)
+		assert.Equal(t, 1, processInstances.JSON200.TotalCount)
+		assert.Equal(t, 1, len(processInstances.JSON200.Partitions))
+		assert.Equal(t, 1, len(processInstances.JSON200.Partitions[0].Items))
+		assert.Equal(t, zenclient.ProcessInstanceProcessType("callActivity"), processInstances.JSON200.Partitions[0].Items[0].ProcessType)
+	})
+
+	t.Run("find child process instances subprocess", func(t *testing.T) {
+		processInstances, err := app.restClient.GetChildProcessInstancesWithResponse(t.Context(), instance3Key, &zenclient.GetChildProcessInstancesParams{})
+		assert.NoError(t, err)
+		assert.Equal(t, 1, processInstances.JSON200.TotalCount)
+		assert.Equal(t, 1, len(processInstances.JSON200.Partitions))
+		assert.Equal(t, 1, len(processInstances.JSON200.Partitions[0].Items))
+		assert.Equal(t, zenclient.ProcessInstanceProcessType("subprocess"), processInstances.JSON200.Partitions[0].Items[0].ProcessType)
+	})
+	assert.NoError(t, err)
+}
+
 func TestUpdateProcessInstanceVariables(t *testing.T) {
 	var processInstanceKey int64
 	definition, _ := deployGetUniqueDefinition(t, "service-task-input-output.bpmn")
@@ -351,6 +528,52 @@ func TestDeleteProcessInstanceVariable(t *testing.T) {
 	})
 }
 
+func TestGetProcessInstanceErrorResponse(t *testing.T) {
+	t.Run("read non existing process instance", func(t *testing.T) {
+		var nonExistingProcessInstanceKey int64 = -1
+		var resp *zenclient.GetProcessInstanceResponse
+		resp, _ = app.restClient.GetProcessInstanceWithResponse(t.Context(), nonExistingProcessInstanceKey)
+
+		assert.Nil(t, resp.JSON200)
+		assert.NotNil(t, resp.JSON502)
+		assert.Equal(t, "CLUSTER_ERROR", resp.JSON502.Code)
+		assert.Equal(t, "failed to get follower node to get process instance: partition not found", resp.JSON502.Message)
+	})
+}
+
+func TestCreateProcessInstanceNotFoundResponse(t *testing.T) {
+	t.Run("try to create process instance with non-existing process definition key. Expect NOT_FOUND", func(t *testing.T) {
+		var nonExistingProcessDefinitionKey int64 = -1
+		var resp *zenclient.CreateProcessInstanceResponse
+		resp, _ = app.restClient.CreateProcessInstanceWithResponse(t.Context(), zenclient.CreateProcessInstanceJSONRequestBody{
+			ProcessDefinitionKey: nonExistingProcessDefinitionKey,
+		})
+
+		assert.Nil(t, resp.JSON201)
+		assert.NotNil(t, resp.JSON404)
+		assert.Equal(t, "NOT_FOUND", resp.JSON404.Code)
+		assert.Contains(t, resp.JSON404.Message, "no process definition with key -1 was found")
+	})
+}
+
+func TestCancelProcessInstanceInWrongStateReturnsConflict(t *testing.T) {
+	t.Run("Return CONFLICT(409) response when trying to cancel instance in non-cancellable state", func(t *testing.T) {
+		var instance public.ProcessInstance
+		definition, err := deployGetDefinition(t, "parallel_flow_with_terminate_end_task.bpmn", "parallel_flow_with_terminate_end_task")
+		assert.NoError(t, err)
+
+		instance, err = createProcessInstance(t, definition.Key, map[string]any{})
+		assert.NoError(t, err)
+		assert.NotEmpty(t, instance.Key)
+
+		cancelResponse, err := app.restClient.CancelProcessInstanceWithResponse(t.Context(), instance.Key)
+		assert.NotNil(t, cancelResponse.JSON409)
+		assert.Equal(t, "CONFLICT", cancelResponse.JSON409.Code)
+		assert.Contains(t, cancelResponse.JSON409.Message, "cannot cancel process instance")
+		assert.Contains(t, cancelResponse.JSON409.Message, "it is not in correct state, expected=ActivityStateActive, actual=ActivityStateCompleted")
+	})
+}
+
 func createProcessInstance(t testing.TB, processDefinitionKey int64, variables map[string]any) (public.ProcessInstance, error) {
 	return createProcessInstanceWithBusinessKey(t, processDefinitionKey, nil, variables)
 }
@@ -396,7 +619,7 @@ func getProcessInstance(t testing.TB, key int64) (public.ProcessInstance, error)
 
 func getChildInstances(t testing.TB, key int64) (public.ProcessInstancePage, error) {
 	resp, err := app.NewRequest(t).
-		WithPath(fmt.Sprintf("/v1/process-instances?parentProcessInstanceKey=%d", key)).
+		WithPath(fmt.Sprintf("/v1/process-instances?parentProcessInstanceKey=%d&includeChildProcesses=true", key)).
 		DoOk()
 	if err != nil {
 		return public.ProcessInstancePage{}, fmt.Errorf("failed to read process instance: %w", err)

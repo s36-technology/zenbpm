@@ -34,13 +34,13 @@ type Querier interface {
 	FindDmnResourceDefinitionByKey(ctx context.Context, key int64) (DmnResourceDefinition, error)
 	FindDmnResourceDefinitionsById(ctx context.Context, dmnResourceDefinitionID string) ([]DmnResourceDefinition, error)
 	FindElementTimers(ctx context.Context, arg FindElementTimersParams) ([]Timer, error)
-	FindInactiveInstancesToDelete(ctx context.Context, currunix sql.NullInt64) ([]int64, error)
+	FindFlowElementInstances(ctx context.Context, arg FindFlowElementInstancesParams) ([]FindFlowElementInstancesRow, error)
+	FindInactiveInstancesToDelete(ctx context.Context, arg FindInactiveInstancesToDeleteParams) ([]int64, error)
 	FindIncidentByKey(ctx context.Context, key int64) (Incident, error)
 	FindIncidents(ctx context.Context, arg FindIncidentsParams) ([]Incident, error)
 	FindIncidentsByExecutionTokenKey(ctx context.Context, executionToken int64) ([]Incident, error)
 	FindIncidentsByProcessInstanceKey(ctx context.Context, processInstanceKey int64) ([]Incident, error)
 	FindIncidentsPageByProcessInstanceKey(ctx context.Context, arg FindIncidentsPageByProcessInstanceKeyParams) ([]FindIncidentsPageByProcessInstanceKeyRow, error)
-	FindJobByElementId(ctx context.Context, arg FindJobByElementIdParams) (Job, error)
 	FindJobByJobKey(ctx context.Context, key int64) (Job, error)
 	FindJobByKey(ctx context.Context, key int64) (Job, error)
 	// force sqlc to keep sort param
@@ -56,6 +56,7 @@ type Querier interface {
 	FindMessageSubscriptions(ctx context.Context, arg FindMessageSubscriptionsParams) ([]MessageSubscription, error)
 	FindProcessByParentExecutionToken(ctx context.Context, parentProcessExecutionToken sql.NullInt64) ([]ProcessInstance, error)
 	FindProcessDefinitionByKey(ctx context.Context, key int64) (ProcessDefinition, error)
+	FindProcessDefinitionStatistics(ctx context.Context, arg FindProcessDefinitionStatisticsParams) ([]FindProcessDefinitionStatisticsRow, error)
 	// force sqlc to keep sort param
 	// workaround for sqlc does not replace params in order by
 	FindProcessDefinitions(ctx context.Context, arg FindProcessDefinitionsParams) ([]FindProcessDefinitionsRow, error)
@@ -69,17 +70,17 @@ type Querier interface {
 	FindProcessInstancesPage(ctx context.Context, arg FindProcessInstancesPageParams) ([]FindProcessInstancesPageRow, error)
 	FindTimers(ctx context.Context, arg FindTimersParams) ([]Timer, error)
 	FindTimersInStateTillDueAt(ctx context.Context, arg FindTimersInStateTillDueAtParams) ([]Timer, error)
-	// https://github.com/sqlc-dev/sqlc/issues/2452
-	FindTokenJobsInState(ctx context.Context, arg FindTokenJobsInStateParams) ([]Job, error)
 	FindTokenMessageSubscriptions(ctx context.Context, arg FindTokenMessageSubscriptionsParams) ([]MessageSubscription, error)
 	FindTokenTimers(ctx context.Context, arg FindTokenTimersParams) ([]Timer, error)
-	FindWaitingJobs(ctx context.Context, arg FindWaitingJobsParams) ([]Job, error)
 	GetAllTokensForProcessInstance(ctx context.Context, processInstanceKey int64) ([]ExecutionToken, error)
 	GetDefinitionKeyByChecksum(ctx context.Context, bpmnChecksum []byte) (int64, error)
 	GetDmnResourceDefinitionKeyByChecksum(ctx context.Context, dmnChecksum []byte) (int64, error)
+	GetElementStatisticsByProcessDefinitionKey(ctx context.Context, processDefinitionKey int64) ([]GetElementStatisticsByProcessDefinitionKeyRow, error)
 	GetFlowElementInstanceByKey(ctx context.Context, key int64) (FlowElementInstance, error)
 	GetFlowElementInstanceByTokenKey(ctx context.Context, executionTokenKey int64) (FlowElementInstance, error)
 	GetFlowElementInstances(ctx context.Context, arg GetFlowElementInstancesParams) ([]GetFlowElementInstancesRow, error)
+	// https://github.com/sqlc-dev/sqlc/issues/2452
+	GetJobsInStateByTokenKey(ctx context.Context, arg GetJobsInStateByTokenKeyParams) ([]Job, error)
 	GetMessageSubscriptionById(ctx context.Context, arg GetMessageSubscriptionByIdParams) (MessageSubscription, error)
 	GetMigrations(ctx context.Context) ([]Migration, error)
 	GetProcessInstance(ctx context.Context, key int64) (ProcessInstance, error)
@@ -87,6 +88,7 @@ type Querier interface {
 	GetTokens(ctx context.Context, keys []int64) ([]ExecutionToken, error)
 	GetTokensForProcessInstance(ctx context.Context, arg GetTokensForProcessInstanceParams) ([]ExecutionToken, error)
 	GetTokensInState(ctx context.Context, state int64) ([]ExecutionToken, error)
+	GetWaitingJobs(ctx context.Context, arg GetWaitingJobsParams) ([]Job, error)
 	SaveDecisionDefinition(ctx context.Context, arg SaveDecisionDefinitionParams) error
 	SaveDecisionInstance(ctx context.Context, arg SaveDecisionInstanceParams) error
 	SaveDmnResourceDefinition(ctx context.Context, arg SaveDmnResourceDefinitionParams) error

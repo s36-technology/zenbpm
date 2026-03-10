@@ -32,6 +32,14 @@ const (
 	JobStateTerminated JobState = "terminated"
 )
 
+// Defines values for ProcessInstanceProcessType.
+const (
+	ProcessInstanceProcessTypeCallActivity  ProcessInstanceProcessType = "callActivity"
+	ProcessInstanceProcessTypeDefault       ProcessInstanceProcessType = "default"
+	ProcessInstanceProcessTypeMultiInstance ProcessInstanceProcessType = "multiInstance"
+	ProcessInstanceProcessTypeSubprocess    ProcessInstanceProcessType = "subprocess"
+)
+
 // Defines values for ProcessInstanceState.
 const (
 	ProcessInstanceStateActive     ProcessInstanceState = "active"
@@ -108,6 +116,21 @@ const (
 	GetProcessDefinitionsParamsSortOrderDesc GetProcessDefinitionsParamsSortOrder = "desc"
 )
 
+// Defines values for GetProcessDefinitionStatisticsParamsSortBy.
+const (
+	GetProcessDefinitionStatisticsParamsSortByBpmnProcessId GetProcessDefinitionStatisticsParamsSortBy = "bpmnProcessId"
+	GetProcessDefinitionStatisticsParamsSortByIncidentCount GetProcessDefinitionStatisticsParamsSortBy = "incidentCount"
+	GetProcessDefinitionStatisticsParamsSortByInstanceCount GetProcessDefinitionStatisticsParamsSortBy = "instanceCount"
+	GetProcessDefinitionStatisticsParamsSortByName          GetProcessDefinitionStatisticsParamsSortBy = "name"
+	GetProcessDefinitionStatisticsParamsSortByVersion       GetProcessDefinitionStatisticsParamsSortBy = "version"
+)
+
+// Defines values for GetProcessDefinitionStatisticsParamsSortOrder.
+const (
+	GetProcessDefinitionStatisticsParamsSortOrderAsc  GetProcessDefinitionStatisticsParamsSortOrder = "asc"
+	GetProcessDefinitionStatisticsParamsSortOrderDesc GetProcessDefinitionStatisticsParamsSortOrder = "desc"
+)
+
 // Defines values for GetProcessInstancesParamsSortBy.
 const (
 	GetProcessInstancesParamsSortByCreatedAt GetProcessInstancesParamsSortBy = "createdAt"
@@ -127,6 +150,26 @@ const (
 	GetProcessInstancesParamsStateCompleted  GetProcessInstancesParamsState = "completed"
 	GetProcessInstancesParamsStateFailed     GetProcessInstancesParamsState = "failed"
 	GetProcessInstancesParamsStateTerminated GetProcessInstancesParamsState = "terminated"
+)
+
+// Defines values for GetChildProcessInstancesParamsSortBy.
+const (
+	GetChildProcessInstancesParamsSortByKey   GetChildProcessInstancesParamsSortBy = "key"
+	GetChildProcessInstancesParamsSortByState GetChildProcessInstancesParamsSortBy = "state"
+)
+
+// Defines values for GetChildProcessInstancesParamsSortOrder.
+const (
+	GetChildProcessInstancesParamsSortOrderAsc  GetChildProcessInstancesParamsSortOrder = "asc"
+	GetChildProcessInstancesParamsSortOrderDesc GetChildProcessInstancesParamsSortOrder = "desc"
+)
+
+// Defines values for GetChildProcessInstancesParamsState.
+const (
+	GetChildProcessInstancesParamsStateActive     GetChildProcessInstancesParamsState = "active"
+	GetChildProcessInstancesParamsStateCompleted  GetChildProcessInstancesParamsState = "completed"
+	GetChildProcessInstancesParamsStateFailed     GetChildProcessInstancesParamsState = "failed"
+	GetChildProcessInstancesParamsStateTerminated GetChildProcessInstancesParamsState = "terminated"
 )
 
 // Defines values for GetIncidentsParamsState.
@@ -215,6 +258,23 @@ type ElementInstance struct {
 	ElementId          string    `json:"elementId"`
 	ElementInstanceKey int64     `json:"elementInstanceKey"`
 	State              string    `json:"state"`
+}
+
+// ElementStatistic Map of elementId to active/incident counts
+type ElementStatistic map[string]ElementStatisticCounts
+
+// ElementStatisticCounts Active and incident counts for a single BPMN element
+type ElementStatisticCounts struct {
+	// ActiveCount Number of active element instances
+	ActiveCount int `json:"activeCount"`
+
+	// IncidentCount Number of incidents on this element
+	IncidentCount int `json:"incidentCount"`
+}
+
+// ElementStatisticsPartitions defines model for ElementStatisticsPartitions.
+type ElementStatisticsPartitions struct {
+	Partitions []PartitionElementStatistics `json:"partitions"`
 }
 
 // Error defines model for Error.
@@ -354,16 +414,38 @@ type IncidentPage struct {
 	TotalCount int `json:"totalCount"`
 }
 
+// InstanceCounts defines model for InstanceCounts.
+type InstanceCounts struct {
+	// Active Number of active instances
+	Active int `json:"active"`
+
+	// Completed Number of completed instances
+	Completed int `json:"completed"`
+
+	// Failed Number of failed instances
+	Failed int `json:"failed"`
+
+	// Terminated Number of terminated instances
+	Terminated int `json:"terminated"`
+
+	// Total Total number of process instances
+	Total int `json:"total"`
+}
+
 // Job defines model for Job.
 type Job struct {
-	Assignee           *string                `json:"assignee,omitempty"`
-	CreatedAt          time.Time              `json:"createdAt"`
-	ElementId          string                 `json:"elementId"`
-	Key                int64                  `json:"key"`
-	ProcessInstanceKey int64                  `json:"processInstanceKey"`
-	State              JobState               `json:"state"`
-	Type               string                 `json:"type"`
-	Variables          map[string]interface{} `json:"variables"`
+	// Assignee Assignee (user assigned to this job)
+	Assignee           *string   `json:"assignee,omitempty"`
+	CreatedAt          time.Time `json:"createdAt"`
+	ElementId          string    `json:"elementId"`
+	Key                int64     `json:"key"`
+	ProcessInstanceKey int64     `json:"processInstanceKey"`
+
+	// Retries Remaining retries
+	Retries   *int                   `json:"retries,omitempty"`
+	State     JobState               `json:"state"`
+	Type      string                 `json:"type"`
+	Variables map[string]interface{} `json:"variables"`
 }
 
 // JobPage defines model for JobPage.
@@ -431,10 +513,23 @@ type PartitionDecisionInstances struct {
 	Partition int                       `json:"partition"`
 }
 
+// PartitionElementStatistics defines model for PartitionElementStatistics.
+type PartitionElementStatistics struct {
+	// Items Map of elementId to active/incident counts
+	Items     ElementStatistic `json:"items"`
+	Partition int              `json:"partition"`
+}
+
 // PartitionJobs defines model for PartitionJobs.
 type PartitionJobs struct {
 	Items     []Job `json:"items"`
 	Partition int   `json:"partition"`
+}
+
+// PartitionProcessDefinitionStatistics defines model for PartitionProcessDefinitionStatistics.
+type PartitionProcessDefinitionStatistics struct {
+	Items     []ProcessDefinitionStatistics `json:"items"`
+	Partition int                           `json:"partition"`
 }
 
 // PartitionProcessInstances defines model for PartitionProcessInstances.
@@ -479,6 +574,29 @@ type ProcessDefinitionSimple struct {
 	Version         int     `json:"version"`
 }
 
+// ProcessDefinitionStatistics defines model for ProcessDefinitionStatistics.
+type ProcessDefinitionStatistics struct {
+	BpmnProcessId  string         `json:"bpmnProcessId"`
+	InstanceCounts InstanceCounts `json:"instanceCounts"`
+	Key            int64          `json:"key"`
+
+	// Name Process name from BPMN
+	Name    *string `json:"name,omitempty"`
+	Version int     `json:"version"`
+}
+
+// ProcessDefinitionStatisticsPage defines model for ProcessDefinitionStatisticsPage.
+type ProcessDefinitionStatisticsPage struct {
+	// Count Number of items in current page
+	Count      int                                    `json:"count"`
+	Page       int                                    `json:"page"`
+	Partitions []PartitionProcessDefinitionStatistics `json:"partitions"`
+	Size       int                                    `json:"size"`
+
+	// TotalCount Total number of items across all pages
+	TotalCount int `json:"totalCount"`
+}
+
 // ProcessDefinitionsPage defines model for ProcessDefinitionsPage.
 type ProcessDefinitionsPage struct {
 	// Count Number of items returned in the current page
@@ -497,16 +615,20 @@ type ProcessDefinitionsPage struct {
 
 // ProcessInstance defines model for ProcessInstance.
 type ProcessInstance struct {
-	ActiveElementInstances   []ElementInstance      `json:"activeElementInstances"`
-	BpmnProcessId            *string                `json:"bpmnProcessId,omitempty"`
-	BusinessKey              *string                `json:"businessKey,omitempty"`
-	CreatedAt                time.Time              `json:"createdAt"`
-	Key                      int64                  `json:"key"`
-	ParentProcessInstanceKey *int64                 `json:"parentProcessInstanceKey,omitempty"`
-	ProcessDefinitionKey     int64                  `json:"processDefinitionKey"`
-	State                    ProcessInstanceState   `json:"state"`
-	Variables                map[string]interface{} `json:"variables"`
+	ActiveElementInstances   []ElementInstance          `json:"activeElementInstances"`
+	BpmnProcessId            *string                    `json:"bpmnProcessId,omitempty"`
+	BusinessKey              *string                    `json:"businessKey,omitempty"`
+	CreatedAt                time.Time                  `json:"createdAt"`
+	Key                      int64                      `json:"key"`
+	ParentProcessInstanceKey *int64                     `json:"parentProcessInstanceKey,omitempty"`
+	ProcessDefinitionKey     int64                      `json:"processDefinitionKey"`
+	ProcessType              ProcessInstanceProcessType `json:"processType"`
+	State                    ProcessInstanceState       `json:"state"`
+	Variables                map[string]interface{}     `json:"variables"`
 }
+
+// ProcessInstanceProcessType defines model for ProcessInstance.ProcessType.
+type ProcessInstanceProcessType string
 
 // ProcessInstanceState defines model for ProcessInstance.State.
 type ProcessInstanceState string
@@ -567,10 +689,10 @@ type GetDecisionInstancesParams struct {
 	// ProcessInstanceKey Filter by process instance
 	ProcessInstanceKey *int64 `form:"processInstanceKey,omitempty" json:"processInstanceKey,omitempty"`
 
-	// EvaluatedFrom Filter: evaluated after this date
+	// EvaluatedFrom Filter - evaluated after this date
 	EvaluatedFrom *time.Time `form:"evaluatedFrom,omitempty" json:"evaluatedFrom,omitempty"`
 
-	// EvaluatedTo Filter: evaluated before this date
+	// EvaluatedTo Filter - evaluated before this date
 	EvaluatedTo *time.Time `form:"evaluatedTo,omitempty" json:"evaluatedTo,omitempty"`
 
 	// Page Page number (1-based indexing)
@@ -624,16 +746,23 @@ type GetDmnResourceDefinitionsParamsSortOrder string
 
 // GetJobsParams defines parameters for GetJobs.
 type GetJobsParams struct {
-	JobType *string   `form:"jobType,omitempty" json:"jobType,omitempty"`
-	State   *JobState `form:"state,omitempty" json:"state,omitempty"`
+	// ProcessInstanceKey Filter by process instance
+	ProcessInstanceKey *int64 `form:"processInstanceKey,omitempty" json:"processInstanceKey,omitempty"`
+
+	// JobType Filter by job type
+	JobType *string `form:"jobType,omitempty" json:"jobType,omitempty"`
 
 	// Assignee Filter by assignee
 	Assignee *string `form:"assignee,omitempty" json:"assignee,omitempty"`
 
-	// ProcessInstanceKey Filter by process instance
-	ProcessInstanceKey *int64 `form:"processInstanceKey,omitempty" json:"processInstanceKey,omitempty"`
-	Page               *int32 `form:"page,omitempty" json:"page,omitempty"`
-	Size               *int32 `form:"size,omitempty" json:"size,omitempty"`
+	// State Filter by job state
+	State *JobState `form:"state,omitempty" json:"state,omitempty"`
+
+	// Page Page number (1-based indexing)
+	Page *int32 `form:"page,omitempty" json:"page,omitempty"`
+
+	// Size Number of items per page (max 100)
+	Size *int32 `form:"size,omitempty" json:"size,omitempty"`
 
 	// SortBy Sort field
 	SortBy *GetJobsParamsSortBy `form:"sortBy,omitempty" json:"sortBy,omitempty"`
@@ -647,6 +776,11 @@ type GetJobsParamsSortBy string
 
 // GetJobsParamsSortOrder defines parameters for GetJobs.
 type GetJobsParamsSortOrder string
+
+// AssignJobJSONBody defines parameters for AssignJob.
+type AssignJobJSONBody struct {
+	Assignee string `json:"assignee"`
+}
 
 // CompleteJobJSONBody defines parameters for CompleteJob.
 type CompleteJobJSONBody struct {
@@ -684,6 +818,12 @@ type StartProcessInstanceOnElementsJSONBody struct {
 
 // GetProcessDefinitionsParams defines parameters for GetProcessDefinitions.
 type GetProcessDefinitionsParams struct {
+	// Page Page number (1-based indexing)
+	Page *int32 `form:"page,omitempty" json:"page,omitempty"`
+
+	// Size Number of items per page (max 100)
+	Size *int32 `form:"size,omitempty" json:"size,omitempty"`
+
 	// OnlyLatest If true, returns only the latest version of each process definition grouped by bpmnProcessId
 	OnlyLatest *bool `form:"onlyLatest,omitempty" json:"onlyLatest,omitempty"`
 
@@ -695,12 +835,6 @@ type GetProcessDefinitionsParams struct {
 
 	// BpmnProcessId Filter by BPMN process ID to get all versions of a specific process
 	BpmnProcessId *string `form:"bpmnProcessId,omitempty" json:"bpmnProcessId,omitempty"`
-
-	// Page Page number (1-based indexing)
-	Page *int32 `form:"page,omitempty" json:"page,omitempty"`
-
-	// Size Number of items per page (max 100)
-	Size *int32 `form:"size,omitempty" json:"size,omitempty"`
 }
 
 // GetProcessDefinitionsParamsSortBy defines parameters for GetProcessDefinitions.
@@ -714,6 +848,39 @@ type CreateProcessDefinitionMultipartBody struct {
 	// Resource BPMN process definition file (.bpmn format only, max 4MB)
 	Resource openapi_types.File `json:"resource"`
 }
+
+// GetProcessDefinitionStatisticsParams defines parameters for GetProcessDefinitionStatistics.
+type GetProcessDefinitionStatisticsParams struct {
+	// Page Page number (1-based indexing)
+	Page *int32 `form:"page,omitempty" json:"page,omitempty"`
+
+	// Size Number of items per page (max 100)
+	Size *int32 `form:"size,omitempty" json:"size,omitempty"`
+
+	// OnlyLatest If true, returns only the latest version of each process definition
+	OnlyLatest *bool `form:"onlyLatest,omitempty" json:"onlyLatest,omitempty"`
+
+	// BpmnProcessIdIn Filter by BPMN process ID
+	BpmnProcessIdIn *[]string `form:"bpmnProcessIdIn,omitempty" json:"bpmnProcessIdIn,omitempty"`
+
+	// BpmnProcessDefinitionKeyIn Filter by process definition key
+	BpmnProcessDefinitionKeyIn *[]int64 `form:"bpmnProcessDefinitionKeyIn,omitempty" json:"bpmnProcessDefinitionKeyIn,omitempty"`
+
+	// Name Filter by name (partial match)
+	Name *string `form:"name,omitempty" json:"name,omitempty"`
+
+	// SortBy Sort field
+	SortBy *GetProcessDefinitionStatisticsParamsSortBy `form:"sortBy,omitempty" json:"sortBy,omitempty"`
+
+	// SortOrder Sort direction
+	SortOrder *GetProcessDefinitionStatisticsParamsSortOrder `form:"sortOrder,omitempty" json:"sortOrder,omitempty"`
+}
+
+// GetProcessDefinitionStatisticsParamsSortBy defines parameters for GetProcessDefinitionStatistics.
+type GetProcessDefinitionStatisticsParamsSortBy string
+
+// GetProcessDefinitionStatisticsParamsSortOrder defines parameters for GetProcessDefinitionStatistics.
+type GetProcessDefinitionStatisticsParamsSortOrder string
 
 // GetProcessInstancesParams defines parameters for GetProcessInstances.
 type GetProcessInstancesParams struct {
@@ -741,14 +908,18 @@ type GetProcessInstancesParams struct {
 	// SortOrder Sort direction
 	SortOrder *GetProcessInstancesParamsSortOrder `form:"sortOrder,omitempty" json:"sortOrder,omitempty"`
 
-	// CreatedFrom Filter: created after this date
+	// CreatedFrom Filter - created after this date
 	CreatedFrom *time.Time `form:"createdFrom,omitempty" json:"createdFrom,omitempty"`
 
-	// CreatedTo Filter: created before this date
+	// CreatedTo Filter - created before this date
 	CreatedTo *time.Time `form:"createdTo,omitempty" json:"createdTo,omitempty"`
 
 	// State Filter by state
 	State *GetProcessInstancesParamsState `form:"state,omitempty" json:"state,omitempty"`
+
+	// ActivityId Filter by current activity element ID
+	ActivityId            *string `form:"activityId,omitempty" json:"activityId,omitempty"`
+	IncludeChildProcesses *bool   `form:"includeChildProcesses,omitempty" json:"includeChildProcesses,omitempty"`
 }
 
 // GetProcessInstancesParamsSortBy defines parameters for GetProcessInstances.
@@ -771,6 +942,33 @@ type CreateProcessInstanceJSONBody struct {
 	Variables            *map[string]interface{} `json:"variables,omitempty"`
 }
 
+// GetChildProcessInstancesParams defines parameters for GetChildProcessInstances.
+type GetChildProcessInstancesParams struct {
+	// Page Page number (1-based indexing)
+	Page *int32 `form:"page,omitempty" json:"page,omitempty"`
+
+	// Size Number of items per page
+	Size *int32 `form:"size,omitempty" json:"size,omitempty"`
+
+	// SortBy Sort field (applies globally across partitions)
+	SortBy *GetChildProcessInstancesParamsSortBy `form:"sortBy,omitempty" json:"sortBy,omitempty"`
+
+	// SortOrder Sort direction
+	SortOrder *GetChildProcessInstancesParamsSortOrder `form:"sortOrder,omitempty" json:"sortOrder,omitempty"`
+
+	// State Filter by state
+	State *GetChildProcessInstancesParamsState `form:"state,omitempty" json:"state,omitempty"`
+}
+
+// GetChildProcessInstancesParamsSortBy defines parameters for GetChildProcessInstances.
+type GetChildProcessInstancesParamsSortBy string
+
+// GetChildProcessInstancesParamsSortOrder defines parameters for GetChildProcessInstances.
+type GetChildProcessInstancesParamsSortOrder string
+
+// GetChildProcessInstancesParamsState defines parameters for GetChildProcessInstances.
+type GetChildProcessInstancesParamsState string
+
 // GetHistoryParams defines parameters for GetHistory.
 type GetHistoryParams struct {
 	// Page Page number (1-based indexing)
@@ -782,6 +980,7 @@ type GetHistoryParams struct {
 
 // GetIncidentsParams defines parameters for GetIncidents.
 type GetIncidentsParams struct {
+	// State Filter by incident state (omit to get all incidents)
 	State *GetIncidentsParamsState `form:"state,omitempty" json:"state,omitempty"`
 
 	// Page Page number (1-based indexing)
@@ -810,6 +1009,9 @@ type UpdateProcessInstanceVariablesJSONBody struct {
 
 // EvaluateDecisionJSONRequestBody defines body for EvaluateDecision for application/json ContentType.
 type EvaluateDecisionJSONRequestBody EvaluateDecisionJSONBody
+
+// AssignJobJSONRequestBody defines body for AssignJob for application/json ContentType.
+type AssignJobJSONRequestBody AssignJobJSONBody
 
 // CompleteJobJSONRequestBody defines body for CompleteJob for application/json ContentType.
 type CompleteJobJSONRequestBody CompleteJobJSONBody
@@ -934,6 +1136,11 @@ type ClientInterface interface {
 	// GetJob request
 	GetJob(ctx context.Context, jobKey int64, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// AssignJobWithBody request with any body
+	AssignJobWithBody(ctx context.Context, jobKey int64, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	AssignJob(ctx context.Context, jobKey int64, body AssignJobJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// CompleteJobWithBody request with any body
 	CompleteJobWithBody(ctx context.Context, jobKey int64, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -960,8 +1167,14 @@ type ClientInterface interface {
 	// CreateProcessDefinitionWithBody request with any body
 	CreateProcessDefinitionWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// GetProcessDefinitionStatistics request
+	GetProcessDefinitionStatistics(ctx context.Context, params *GetProcessDefinitionStatisticsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// GetProcessDefinition request
 	GetProcessDefinition(ctx context.Context, processDefinitionKey int64, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetProcessDefinitionElementStatistics request
+	GetProcessDefinitionElementStatistics(ctx context.Context, processDefinitionKey int64, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// GetProcessInstances request
 	GetProcessInstances(ctx context.Context, params *GetProcessInstancesParams, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -973,6 +1186,12 @@ type ClientInterface interface {
 
 	// GetProcessInstance request
 	GetProcessInstance(ctx context.Context, processInstanceKey int64, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CancelProcessInstance request
+	CancelProcessInstance(ctx context.Context, processInstanceKey int64, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetChildProcessInstances request
+	GetChildProcessInstances(ctx context.Context, processInstanceKey int64, params *GetChildProcessInstancesParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// GetHistory request
 	GetHistory(ctx context.Context, processInstanceKey int64, params *GetHistoryParams, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -991,11 +1210,11 @@ type ClientInterface interface {
 	// DeleteProcessInstanceVariable request
 	DeleteProcessInstanceVariable(ctx context.Context, processInstanceKey int64, variableName string, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// TestStartCpuProfile request
-	TestStartCpuProfile(ctx context.Context, nodeId string, reqEditors ...RequestEditorFn) (*http.Response, error)
+	// TestStartPprofServer request
+	TestStartPprofServer(ctx context.Context, nodeId string, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// TestStopCpuProfile request
-	TestStopCpuProfile(ctx context.Context, nodeId string, reqEditors ...RequestEditorFn) (*http.Response, error)
+	// TestStopPprofServer request
+	TestStopPprofServer(ctx context.Context, nodeId string, reqEditors ...RequestEditorFn) (*http.Response, error)
 }
 
 func (c *Client) EvaluateDecisionWithBody(ctx context.Context, decisionId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -1108,6 +1327,30 @@ func (c *Client) GetJobs(ctx context.Context, params *GetJobsParams, reqEditors 
 
 func (c *Client) GetJob(ctx context.Context, jobKey int64, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetJobRequest(c.Server, jobKey)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) AssignJobWithBody(ctx context.Context, jobKey int64, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewAssignJobRequestWithBody(c.Server, jobKey, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) AssignJob(ctx context.Context, jobKey int64, body AssignJobJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewAssignJobRequest(c.Server, jobKey, body)
 	if err != nil {
 		return nil, err
 	}
@@ -1238,8 +1481,32 @@ func (c *Client) CreateProcessDefinitionWithBody(ctx context.Context, contentTyp
 	return c.Client.Do(req)
 }
 
+func (c *Client) GetProcessDefinitionStatistics(ctx context.Context, params *GetProcessDefinitionStatisticsParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetProcessDefinitionStatisticsRequest(c.Server, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 func (c *Client) GetProcessDefinition(ctx context.Context, processDefinitionKey int64, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetProcessDefinitionRequest(c.Server, processDefinitionKey)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetProcessDefinitionElementStatistics(ctx context.Context, processDefinitionKey int64, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetProcessDefinitionElementStatisticsRequest(c.Server, processDefinitionKey)
 	if err != nil {
 		return nil, err
 	}
@@ -1288,6 +1555,30 @@ func (c *Client) CreateProcessInstance(ctx context.Context, body CreateProcessIn
 
 func (c *Client) GetProcessInstance(ctx context.Context, processInstanceKey int64, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetProcessInstanceRequest(c.Server, processInstanceKey)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) CancelProcessInstance(ctx context.Context, processInstanceKey int64, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCancelProcessInstanceRequest(c.Server, processInstanceKey)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetChildProcessInstances(ctx context.Context, processInstanceKey int64, params *GetChildProcessInstancesParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetChildProcessInstancesRequest(c.Server, processInstanceKey, params)
 	if err != nil {
 		return nil, err
 	}
@@ -1370,8 +1661,8 @@ func (c *Client) DeleteProcessInstanceVariable(ctx context.Context, processInsta
 	return c.Client.Do(req)
 }
 
-func (c *Client) TestStartCpuProfile(ctx context.Context, nodeId string, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewTestStartCpuProfileRequest(c.Server, nodeId)
+func (c *Client) TestStartPprofServer(ctx context.Context, nodeId string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewTestStartPprofServerRequest(c.Server, nodeId)
 	if err != nil {
 		return nil, err
 	}
@@ -1382,8 +1673,8 @@ func (c *Client) TestStartCpuProfile(ctx context.Context, nodeId string, reqEdit
 	return c.Client.Do(req)
 }
 
-func (c *Client) TestStopCpuProfile(ctx context.Context, nodeId string, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewTestStopCpuProfileRequest(c.Server, nodeId)
+func (c *Client) TestStopPprofServer(ctx context.Context, nodeId string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewTestStopPprofServerRequest(c.Server, nodeId)
 	if err != nil {
 		return nil, err
 	}
@@ -1916,9 +2207,9 @@ func NewGetJobsRequest(server string, params *GetJobsParams) (*http.Request, err
 	if params != nil {
 		queryValues := queryURL.Query()
 
-		if params.JobType != nil {
+		if params.ProcessInstanceKey != nil {
 
-			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "jobType", runtime.ParamLocationQuery, *params.JobType); err != nil {
+			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "processInstanceKey", runtime.ParamLocationQuery, *params.ProcessInstanceKey); err != nil {
 				return nil, err
 			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
 				return nil, err
@@ -1932,9 +2223,9 @@ func NewGetJobsRequest(server string, params *GetJobsParams) (*http.Request, err
 
 		}
 
-		if params.State != nil {
+		if params.JobType != nil {
 
-			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "state", runtime.ParamLocationQuery, *params.State); err != nil {
+			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "jobType", runtime.ParamLocationQuery, *params.JobType); err != nil {
 				return nil, err
 			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
 				return nil, err
@@ -1964,9 +2255,9 @@ func NewGetJobsRequest(server string, params *GetJobsParams) (*http.Request, err
 
 		}
 
-		if params.ProcessInstanceKey != nil {
+		if params.State != nil {
 
-			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "processInstanceKey", runtime.ParamLocationQuery, *params.ProcessInstanceKey); err != nil {
+			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "state", runtime.ParamLocationQuery, *params.State); err != nil {
 				return nil, err
 			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
 				return nil, err
@@ -2085,6 +2376,53 @@ func NewGetJobRequest(server string, jobKey int64) (*http.Request, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	return req, nil
+}
+
+// NewAssignJobRequest calls the generic AssignJob builder with application/json body
+func NewAssignJobRequest(server string, jobKey int64, body AssignJobJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewAssignJobRequestWithBody(server, jobKey, "application/json", bodyReader)
+}
+
+// NewAssignJobRequestWithBody generates requests for AssignJob with any type of body
+func NewAssignJobRequestWithBody(server string, jobKey int64, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "jobKey", runtime.ParamLocationPath, jobKey)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/jobs/%s/assign", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
 
 	return req, nil
 }
@@ -2278,6 +2616,38 @@ func NewGetProcessDefinitionsRequest(server string, params *GetProcessDefinition
 	if params != nil {
 		queryValues := queryURL.Query()
 
+		if params.Page != nil {
+
+			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "page", runtime.ParamLocationQuery, *params.Page); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		if params.Size != nil {
+
+			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "size", runtime.ParamLocationQuery, *params.Size); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
 		if params.OnlyLatest != nil {
 
 			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "onlyLatest", runtime.ParamLocationQuery, *params.OnlyLatest); err != nil {
@@ -2342,38 +2712,6 @@ func NewGetProcessDefinitionsRequest(server string, params *GetProcessDefinition
 
 		}
 
-		if params.Page != nil {
-
-			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "page", runtime.ParamLocationQuery, *params.Page); err != nil {
-				return nil, err
-			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
-				return nil, err
-			} else {
-				for k, v := range parsed {
-					for _, v2 := range v {
-						queryValues.Add(k, v2)
-					}
-				}
-			}
-
-		}
-
-		if params.Size != nil {
-
-			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "size", runtime.ParamLocationQuery, *params.Size); err != nil {
-				return nil, err
-			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
-				return nil, err
-			} else {
-				for k, v := range parsed {
-					for _, v2 := range v {
-						queryValues.Add(k, v2)
-					}
-				}
-			}
-
-		}
-
 		queryURL.RawQuery = queryValues.Encode()
 	}
 
@@ -2414,6 +2752,167 @@ func NewCreateProcessDefinitionRequestWithBody(server string, contentType string
 	return req, nil
 }
 
+// NewGetProcessDefinitionStatisticsRequest generates requests for GetProcessDefinitionStatistics
+func NewGetProcessDefinitionStatisticsRequest(server string, params *GetProcessDefinitionStatisticsParams) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/process-definitions/statistics")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		queryValues := queryURL.Query()
+
+		if params.Page != nil {
+
+			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "page", runtime.ParamLocationQuery, *params.Page); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		if params.Size != nil {
+
+			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "size", runtime.ParamLocationQuery, *params.Size); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		if params.OnlyLatest != nil {
+
+			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "onlyLatest", runtime.ParamLocationQuery, *params.OnlyLatest); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		if params.BpmnProcessIdIn != nil {
+
+			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "bpmnProcessIdIn", runtime.ParamLocationQuery, *params.BpmnProcessIdIn); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		if params.BpmnProcessDefinitionKeyIn != nil {
+
+			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "bpmnProcessDefinitionKeyIn", runtime.ParamLocationQuery, *params.BpmnProcessDefinitionKeyIn); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		if params.Name != nil {
+
+			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "name", runtime.ParamLocationQuery, *params.Name); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		if params.SortBy != nil {
+
+			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "sortBy", runtime.ParamLocationQuery, *params.SortBy); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		if params.SortOrder != nil {
+
+			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "sortOrder", runtime.ParamLocationQuery, *params.SortOrder); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		queryURL.RawQuery = queryValues.Encode()
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 // NewGetProcessDefinitionRequest generates requests for GetProcessDefinition
 func NewGetProcessDefinitionRequest(server string, processDefinitionKey int64) (*http.Request, error) {
 	var err error
@@ -2431,6 +2930,40 @@ func NewGetProcessDefinitionRequest(server string, processDefinitionKey int64) (
 	}
 
 	operationPath := fmt.Sprintf("/process-definitions/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewGetProcessDefinitionElementStatisticsRequest generates requests for GetProcessDefinitionElementStatistics
+func NewGetProcessDefinitionElementStatisticsRequest(server string, processDefinitionKey int64) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "processDefinitionKey", runtime.ParamLocationPath, processDefinitionKey)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/process-definitions/%s/statistics", pathParam0)
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -2646,6 +3179,38 @@ func NewGetProcessInstancesRequest(server string, params *GetProcessInstancesPar
 
 		}
 
+		if params.ActivityId != nil {
+
+			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "activityId", runtime.ParamLocationQuery, *params.ActivityId); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		if params.IncludeChildProcesses != nil {
+
+			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "includeChildProcesses", runtime.ParamLocationQuery, *params.IncludeChildProcesses); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
 		queryURL.RawQuery = queryValues.Encode()
 	}
 
@@ -2721,6 +3286,160 @@ func NewGetProcessInstanceRequest(server string, processInstanceKey int64) (*htt
 	queryURL, err := serverURL.Parse(operationPath)
 	if err != nil {
 		return nil, err
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewCancelProcessInstanceRequest generates requests for CancelProcessInstance
+func NewCancelProcessInstanceRequest(server string, processInstanceKey int64) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "processInstanceKey", runtime.ParamLocationPath, processInstanceKey)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/process-instances/%s/cancel", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewGetChildProcessInstancesRequest generates requests for GetChildProcessInstances
+func NewGetChildProcessInstancesRequest(server string, processInstanceKey int64, params *GetChildProcessInstancesParams) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "processInstanceKey", runtime.ParamLocationPath, processInstanceKey)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/process-instances/%s/child-processes", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		queryValues := queryURL.Query()
+
+		if params.Page != nil {
+
+			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "page", runtime.ParamLocationQuery, *params.Page); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		if params.Size != nil {
+
+			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "size", runtime.ParamLocationQuery, *params.Size); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		if params.SortBy != nil {
+
+			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "sortBy", runtime.ParamLocationQuery, *params.SortBy); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		if params.SortOrder != nil {
+
+			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "sortOrder", runtime.ParamLocationQuery, *params.SortOrder); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		if params.State != nil {
+
+			if queryFrag, err := runtime.StyleParamWithLocation("form", true, "state", runtime.ParamLocationQuery, *params.State); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		queryURL.RawQuery = queryValues.Encode()
 	}
 
 	req, err := http.NewRequest("GET", queryURL.String(), nil)
@@ -3051,8 +3770,8 @@ func NewDeleteProcessInstanceVariableRequest(server string, processInstanceKey i
 	return req, nil
 }
 
-// NewTestStartCpuProfileRequest generates requests for TestStartCpuProfile
-func NewTestStartCpuProfileRequest(server string, nodeId string) (*http.Request, error) {
+// NewTestStartPprofServerRequest generates requests for TestStartPprofServer
+func NewTestStartPprofServerRequest(server string, nodeId string) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
@@ -3067,7 +3786,7 @@ func NewTestStartCpuProfileRequest(server string, nodeId string) (*http.Request,
 		return nil, err
 	}
 
-	operationPath := fmt.Sprintf("/tests/%s/start-cpu-profile", pathParam0)
+	operationPath := fmt.Sprintf("/tests/%s/start-pprof-server", pathParam0)
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -3085,8 +3804,8 @@ func NewTestStartCpuProfileRequest(server string, nodeId string) (*http.Request,
 	return req, nil
 }
 
-// NewTestStopCpuProfileRequest generates requests for TestStopCpuProfile
-func NewTestStopCpuProfileRequest(server string, nodeId string) (*http.Request, error) {
+// NewTestStopPprofServerRequest generates requests for TestStopPprofServer
+func NewTestStopPprofServerRequest(server string, nodeId string) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
@@ -3101,7 +3820,7 @@ func NewTestStopCpuProfileRequest(server string, nodeId string) (*http.Request, 
 		return nil, err
 	}
 
-	operationPath := fmt.Sprintf("/tests/%s/stop-cpu-profile", pathParam0)
+	operationPath := fmt.Sprintf("/tests/%s/stop-pprof-server", pathParam0)
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -3191,6 +3910,11 @@ type ClientWithResponsesInterface interface {
 	// GetJobWithResponse request
 	GetJobWithResponse(ctx context.Context, jobKey int64, reqEditors ...RequestEditorFn) (*GetJobResponse, error)
 
+	// AssignJobWithBodyWithResponse request with any body
+	AssignJobWithBodyWithResponse(ctx context.Context, jobKey int64, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*AssignJobResponse, error)
+
+	AssignJobWithResponse(ctx context.Context, jobKey int64, body AssignJobJSONRequestBody, reqEditors ...RequestEditorFn) (*AssignJobResponse, error)
+
 	// CompleteJobWithBodyWithResponse request with any body
 	CompleteJobWithBodyWithResponse(ctx context.Context, jobKey int64, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CompleteJobResponse, error)
 
@@ -3217,8 +3941,14 @@ type ClientWithResponsesInterface interface {
 	// CreateProcessDefinitionWithBodyWithResponse request with any body
 	CreateProcessDefinitionWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateProcessDefinitionResponse, error)
 
+	// GetProcessDefinitionStatisticsWithResponse request
+	GetProcessDefinitionStatisticsWithResponse(ctx context.Context, params *GetProcessDefinitionStatisticsParams, reqEditors ...RequestEditorFn) (*GetProcessDefinitionStatisticsResponse, error)
+
 	// GetProcessDefinitionWithResponse request
 	GetProcessDefinitionWithResponse(ctx context.Context, processDefinitionKey int64, reqEditors ...RequestEditorFn) (*GetProcessDefinitionResponse, error)
+
+	// GetProcessDefinitionElementStatisticsWithResponse request
+	GetProcessDefinitionElementStatisticsWithResponse(ctx context.Context, processDefinitionKey int64, reqEditors ...RequestEditorFn) (*GetProcessDefinitionElementStatisticsResponse, error)
 
 	// GetProcessInstancesWithResponse request
 	GetProcessInstancesWithResponse(ctx context.Context, params *GetProcessInstancesParams, reqEditors ...RequestEditorFn) (*GetProcessInstancesResponse, error)
@@ -3230,6 +3960,12 @@ type ClientWithResponsesInterface interface {
 
 	// GetProcessInstanceWithResponse request
 	GetProcessInstanceWithResponse(ctx context.Context, processInstanceKey int64, reqEditors ...RequestEditorFn) (*GetProcessInstanceResponse, error)
+
+	// CancelProcessInstanceWithResponse request
+	CancelProcessInstanceWithResponse(ctx context.Context, processInstanceKey int64, reqEditors ...RequestEditorFn) (*CancelProcessInstanceResponse, error)
+
+	// GetChildProcessInstancesWithResponse request
+	GetChildProcessInstancesWithResponse(ctx context.Context, processInstanceKey int64, params *GetChildProcessInstancesParams, reqEditors ...RequestEditorFn) (*GetChildProcessInstancesResponse, error)
 
 	// GetHistoryWithResponse request
 	GetHistoryWithResponse(ctx context.Context, processInstanceKey int64, params *GetHistoryParams, reqEditors ...RequestEditorFn) (*GetHistoryResponse, error)
@@ -3248,11 +3984,11 @@ type ClientWithResponsesInterface interface {
 	// DeleteProcessInstanceVariableWithResponse request
 	DeleteProcessInstanceVariableWithResponse(ctx context.Context, processInstanceKey int64, variableName string, reqEditors ...RequestEditorFn) (*DeleteProcessInstanceVariableResponse, error)
 
-	// TestStartCpuProfileWithResponse request
-	TestStartCpuProfileWithResponse(ctx context.Context, nodeId string, reqEditors ...RequestEditorFn) (*TestStartCpuProfileResponse, error)
+	// TestStartPprofServerWithResponse request
+	TestStartPprofServerWithResponse(ctx context.Context, nodeId string, reqEditors ...RequestEditorFn) (*TestStartPprofServerResponse, error)
 
-	// TestStopCpuProfileWithResponse request
-	TestStopCpuProfileWithResponse(ctx context.Context, nodeId string, reqEditors ...RequestEditorFn) (*TestStopCpuProfileResponse, error)
+	// TestStopPprofServerWithResponse request
+	TestStopPprofServerWithResponse(ctx context.Context, nodeId string, reqEditors ...RequestEditorFn) (*TestStopPprofServerResponse, error)
 }
 
 type EvaluateDecisionResponse struct {
@@ -3473,6 +4209,31 @@ func (r GetJobResponse) StatusCode() int {
 	return 0
 }
 
+type AssignJobResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON400      *Error
+	JSON404      *Error
+	JSON500      *Error
+	JSON502      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r AssignJobResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r AssignJobResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
 type CompleteJobResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -3527,6 +4288,7 @@ type ModifyProcessInstanceResponse struct {
 		ProcessInstance        *ProcessInstance   `json:"processInstance,omitempty"`
 	}
 	JSON400 *Error
+	JSON404 *Error
 	JSON500 *Error
 	JSON502 *Error
 }
@@ -3552,6 +4314,7 @@ type StartProcessInstanceOnElementsResponse struct {
 	HTTPResponse *http.Response
 	JSON201      *ProcessInstance
 	JSON400      *Error
+	JSON404      *Error
 	JSON500      *Error
 	JSON502      *Error
 }
@@ -3576,6 +4339,7 @@ type GetProcessDefinitionsResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON200      *ProcessDefinitionsPage
+	JSON400      *Error
 	JSON500      *Error
 }
 
@@ -3603,6 +4367,7 @@ type CreateProcessDefinitionResponse struct {
 	}
 	JSON400 *Error
 	JSON409 *Error
+	JSON500 *Error
 	JSON502 *Error
 }
 
@@ -3622,11 +4387,37 @@ func (r CreateProcessDefinitionResponse) StatusCode() int {
 	return 0
 }
 
+type GetProcessDefinitionStatisticsResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *ProcessDefinitionStatisticsPage
+	JSON400      *Error
+	JSON500      *Error
+	JSON502      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r GetProcessDefinitionStatisticsResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetProcessDefinitionStatisticsResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
 type GetProcessDefinitionResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON200      *ProcessDefinitionDetail
 	JSON400      *Error
+	JSON404      *Error
 	JSON500      *Error
 }
 
@@ -3640,6 +4431,32 @@ func (r GetProcessDefinitionResponse) Status() string {
 
 // StatusCode returns HTTPResponse.StatusCode
 func (r GetProcessDefinitionResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type GetProcessDefinitionElementStatisticsResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *ElementStatisticsPartitions
+	JSON400      *Error
+	JSON404      *Error
+	JSON500      *Error
+	JSON502      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r GetProcessDefinitionElementStatisticsResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetProcessDefinitionElementStatisticsResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
@@ -3676,6 +4493,7 @@ type CreateProcessInstanceResponse struct {
 	HTTPResponse *http.Response
 	JSON201      *ProcessInstance
 	JSON400      *Error
+	JSON404      *Error
 	JSON500      *Error
 	JSON502      *Error
 }
@@ -3700,7 +4518,7 @@ type GetProcessInstanceResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON200      *ProcessInstance
-	JSON400      *Error
+	JSON404      *Error
 	JSON500      *Error
 	JSON502      *Error
 }
@@ -3721,11 +4539,63 @@ func (r GetProcessInstanceResponse) StatusCode() int {
 	return 0
 }
 
+type CancelProcessInstanceResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON400      *Error
+	JSON404      *Error
+	JSON409      *Error
+	JSON500      *Error
+	JSON502      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r CancelProcessInstanceResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CancelProcessInstanceResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type GetChildProcessInstancesResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *ProcessInstancePage
+	JSON400      *Error
+	JSON500      *Error
+	JSON502      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r GetChildProcessInstancesResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetChildProcessInstancesResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
 type GetHistoryResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON200      *FlowElementHistoryPage
 	JSON400      *Error
+	JSON500      *Error
 	JSON502      *Error
 }
 
@@ -3750,6 +4620,7 @@ type GetIncidentsResponse struct {
 	HTTPResponse *http.Response
 	JSON200      *IncidentPage
 	JSON400      *Error
+	JSON500      *Error
 	JSON502      *Error
 }
 
@@ -3798,6 +4669,9 @@ type UpdateProcessInstanceVariablesResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON400      *Error
+	JSON404      *Error
+	JSON409      *Error
+	JSON500      *Error
 	JSON502      *Error
 }
 
@@ -3822,6 +4696,8 @@ type DeleteProcessInstanceVariableResponse struct {
 	HTTPResponse *http.Response
 	JSON400      *Error
 	JSON404      *Error
+	JSON409      *Error
+	JSON500      *Error
 	JSON502      *Error
 }
 
@@ -3841,14 +4717,14 @@ func (r DeleteProcessInstanceVariableResponse) StatusCode() int {
 	return 0
 }
 
-type TestStartCpuProfileResponse struct {
+type TestStartPprofServerResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON500      *Error
 }
 
 // Status returns HTTPResponse.Status
-func (r TestStartCpuProfileResponse) Status() string {
+func (r TestStartPprofServerResponse) Status() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Status
 	}
@@ -3856,24 +4732,21 @@ func (r TestStartCpuProfileResponse) Status() string {
 }
 
 // StatusCode returns HTTPResponse.StatusCode
-func (r TestStartCpuProfileResponse) StatusCode() int {
+func (r TestStartPprofServerResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
 	return 0
 }
 
-type TestStopCpuProfileResponse struct {
+type TestStopPprofServerResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
-	JSON200      *struct {
-		Pprof *[]byte `json:"pprof,omitempty"`
-	}
-	JSON500 *Error
+	JSON500      *Error
 }
 
 // Status returns HTTPResponse.Status
-func (r TestStopCpuProfileResponse) Status() string {
+func (r TestStopPprofServerResponse) Status() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Status
 	}
@@ -3881,7 +4754,7 @@ func (r TestStopCpuProfileResponse) Status() string {
 }
 
 // StatusCode returns HTTPResponse.StatusCode
-func (r TestStopCpuProfileResponse) StatusCode() int {
+func (r TestStopPprofServerResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
@@ -3977,6 +4850,23 @@ func (c *ClientWithResponses) GetJobWithResponse(ctx context.Context, jobKey int
 	return ParseGetJobResponse(rsp)
 }
 
+// AssignJobWithBodyWithResponse request with arbitrary body returning *AssignJobResponse
+func (c *ClientWithResponses) AssignJobWithBodyWithResponse(ctx context.Context, jobKey int64, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*AssignJobResponse, error) {
+	rsp, err := c.AssignJobWithBody(ctx, jobKey, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseAssignJobResponse(rsp)
+}
+
+func (c *ClientWithResponses) AssignJobWithResponse(ctx context.Context, jobKey int64, body AssignJobJSONRequestBody, reqEditors ...RequestEditorFn) (*AssignJobResponse, error) {
+	rsp, err := c.AssignJob(ctx, jobKey, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseAssignJobResponse(rsp)
+}
+
 // CompleteJobWithBodyWithResponse request with arbitrary body returning *CompleteJobResponse
 func (c *ClientWithResponses) CompleteJobWithBodyWithResponse(ctx context.Context, jobKey int64, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CompleteJobResponse, error) {
 	rsp, err := c.CompleteJobWithBody(ctx, jobKey, contentType, body, reqEditors...)
@@ -4063,6 +4953,15 @@ func (c *ClientWithResponses) CreateProcessDefinitionWithBodyWithResponse(ctx co
 	return ParseCreateProcessDefinitionResponse(rsp)
 }
 
+// GetProcessDefinitionStatisticsWithResponse request returning *GetProcessDefinitionStatisticsResponse
+func (c *ClientWithResponses) GetProcessDefinitionStatisticsWithResponse(ctx context.Context, params *GetProcessDefinitionStatisticsParams, reqEditors ...RequestEditorFn) (*GetProcessDefinitionStatisticsResponse, error) {
+	rsp, err := c.GetProcessDefinitionStatistics(ctx, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetProcessDefinitionStatisticsResponse(rsp)
+}
+
 // GetProcessDefinitionWithResponse request returning *GetProcessDefinitionResponse
 func (c *ClientWithResponses) GetProcessDefinitionWithResponse(ctx context.Context, processDefinitionKey int64, reqEditors ...RequestEditorFn) (*GetProcessDefinitionResponse, error) {
 	rsp, err := c.GetProcessDefinition(ctx, processDefinitionKey, reqEditors...)
@@ -4070,6 +4969,15 @@ func (c *ClientWithResponses) GetProcessDefinitionWithResponse(ctx context.Conte
 		return nil, err
 	}
 	return ParseGetProcessDefinitionResponse(rsp)
+}
+
+// GetProcessDefinitionElementStatisticsWithResponse request returning *GetProcessDefinitionElementStatisticsResponse
+func (c *ClientWithResponses) GetProcessDefinitionElementStatisticsWithResponse(ctx context.Context, processDefinitionKey int64, reqEditors ...RequestEditorFn) (*GetProcessDefinitionElementStatisticsResponse, error) {
+	rsp, err := c.GetProcessDefinitionElementStatistics(ctx, processDefinitionKey, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetProcessDefinitionElementStatisticsResponse(rsp)
 }
 
 // GetProcessInstancesWithResponse request returning *GetProcessInstancesResponse
@@ -4105,6 +5013,24 @@ func (c *ClientWithResponses) GetProcessInstanceWithResponse(ctx context.Context
 		return nil, err
 	}
 	return ParseGetProcessInstanceResponse(rsp)
+}
+
+// CancelProcessInstanceWithResponse request returning *CancelProcessInstanceResponse
+func (c *ClientWithResponses) CancelProcessInstanceWithResponse(ctx context.Context, processInstanceKey int64, reqEditors ...RequestEditorFn) (*CancelProcessInstanceResponse, error) {
+	rsp, err := c.CancelProcessInstance(ctx, processInstanceKey, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCancelProcessInstanceResponse(rsp)
+}
+
+// GetChildProcessInstancesWithResponse request returning *GetChildProcessInstancesResponse
+func (c *ClientWithResponses) GetChildProcessInstancesWithResponse(ctx context.Context, processInstanceKey int64, params *GetChildProcessInstancesParams, reqEditors ...RequestEditorFn) (*GetChildProcessInstancesResponse, error) {
+	rsp, err := c.GetChildProcessInstances(ctx, processInstanceKey, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetChildProcessInstancesResponse(rsp)
 }
 
 // GetHistoryWithResponse request returning *GetHistoryResponse
@@ -4160,22 +5086,22 @@ func (c *ClientWithResponses) DeleteProcessInstanceVariableWithResponse(ctx cont
 	return ParseDeleteProcessInstanceVariableResponse(rsp)
 }
 
-// TestStartCpuProfileWithResponse request returning *TestStartCpuProfileResponse
-func (c *ClientWithResponses) TestStartCpuProfileWithResponse(ctx context.Context, nodeId string, reqEditors ...RequestEditorFn) (*TestStartCpuProfileResponse, error) {
-	rsp, err := c.TestStartCpuProfile(ctx, nodeId, reqEditors...)
+// TestStartPprofServerWithResponse request returning *TestStartPprofServerResponse
+func (c *ClientWithResponses) TestStartPprofServerWithResponse(ctx context.Context, nodeId string, reqEditors ...RequestEditorFn) (*TestStartPprofServerResponse, error) {
+	rsp, err := c.TestStartPprofServer(ctx, nodeId, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
-	return ParseTestStartCpuProfileResponse(rsp)
+	return ParseTestStartPprofServerResponse(rsp)
 }
 
-// TestStopCpuProfileWithResponse request returning *TestStopCpuProfileResponse
-func (c *ClientWithResponses) TestStopCpuProfileWithResponse(ctx context.Context, nodeId string, reqEditors ...RequestEditorFn) (*TestStopCpuProfileResponse, error) {
-	rsp, err := c.TestStopCpuProfile(ctx, nodeId, reqEditors...)
+// TestStopPprofServerWithResponse request returning *TestStopPprofServerResponse
+func (c *ClientWithResponses) TestStopPprofServerWithResponse(ctx context.Context, nodeId string, reqEditors ...RequestEditorFn) (*TestStopPprofServerResponse, error) {
+	rsp, err := c.TestStopPprofServer(ctx, nodeId, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
-	return ParseTestStopCpuProfileResponse(rsp)
+	return ParseTestStopPprofServerResponse(rsp)
 }
 
 // ParseEvaluateDecisionResponse parses an HTTP response from a EvaluateDecisionWithResponse call
@@ -4540,6 +5466,53 @@ func ParseGetJobResponse(rsp *http.Response) (*GetJobResponse, error) {
 	return response, nil
 }
 
+// ParseAssignJobResponse parses an HTTP response from a AssignJobWithResponse call
+func ParseAssignJobResponse(rsp *http.Response) (*AssignJobResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &AssignJobResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 502:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON502 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseCompleteJobResponse parses an HTTP response from a CompleteJobWithResponse call
 func ParseCompleteJobResponse(rsp *http.Response) (*CompleteJobResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -4637,6 +5610,13 @@ func ParseModifyProcessInstanceResponse(rsp *http.Response) (*ModifyProcessInsta
 		}
 		response.JSON400 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest Error
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -4684,6 +5664,13 @@ func ParseStartProcessInstanceOnElementsResponse(rsp *http.Response) (*StartProc
 		}
 		response.JSON400 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest Error
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -4723,6 +5710,13 @@ func ParseGetProcessDefinitionsResponse(rsp *http.Response) (*GetProcessDefiniti
 			return nil, err
 		}
 		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest Error
@@ -4773,6 +5767,60 @@ func ParseCreateProcessDefinitionResponse(rsp *http.Response) (*CreateProcessDef
 		}
 		response.JSON409 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 502:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON502 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetProcessDefinitionStatisticsResponse parses an HTTP response from a GetProcessDefinitionStatisticsWithResponse call
+func ParseGetProcessDefinitionStatisticsResponse(rsp *http.Response) (*GetProcessDefinitionStatisticsResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetProcessDefinitionStatisticsResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest ProcessDefinitionStatisticsPage
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 502:
 		var dest Error
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -4813,12 +5861,73 @@ func ParseGetProcessDefinitionResponse(rsp *http.Response) (*GetProcessDefinitio
 		}
 		response.JSON400 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest Error
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
 		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetProcessDefinitionElementStatisticsResponse parses an HTTP response from a GetProcessDefinitionElementStatisticsWithResponse call
+func ParseGetProcessDefinitionElementStatisticsResponse(rsp *http.Response) (*GetProcessDefinitionElementStatisticsResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetProcessDefinitionElementStatisticsResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest ElementStatisticsPartitions
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 502:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON502 = &dest
 
 	}
 
@@ -4900,6 +6009,13 @@ func ParseCreateProcessInstanceResponse(rsp *http.Response) (*CreateProcessInsta
 		}
 		response.JSON400 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest Error
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -4935,6 +6051,107 @@ func ParseGetProcessInstanceResponse(rsp *http.Response) (*GetProcessInstanceRes
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
 		var dest ProcessInstance
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 502:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON502 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCancelProcessInstanceResponse parses an HTTP response from a CancelProcessInstanceWithResponse call
+func ParseCancelProcessInstanceResponse(rsp *http.Response) (*CancelProcessInstanceResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CancelProcessInstanceResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 502:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON502 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetChildProcessInstancesResponse parses an HTTP response from a GetChildProcessInstancesWithResponse call
+func ParseGetChildProcessInstancesResponse(rsp *http.Response) (*GetChildProcessInstancesResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetChildProcessInstancesResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest ProcessInstancePage
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
@@ -4994,6 +6211,13 @@ func ParseGetHistoryResponse(rsp *http.Response) (*GetHistoryResponse, error) {
 		}
 		response.JSON400 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 502:
 		var dest Error
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -5033,6 +6257,13 @@ func ParseGetIncidentsResponse(rsp *http.Response) (*GetIncidentsResponse, error
 			return nil, err
 		}
 		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 502:
 		var dest Error
@@ -5114,6 +6345,27 @@ func ParseUpdateProcessInstanceVariablesResponse(rsp *http.Response) (*UpdatePro
 		}
 		response.JSON400 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 502:
 		var dest Error
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -5154,6 +6406,20 @@ func ParseDeleteProcessInstanceVariableResponse(rsp *http.Response) (*DeleteProc
 		}
 		response.JSON404 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 502:
 		var dest Error
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -5166,15 +6432,15 @@ func ParseDeleteProcessInstanceVariableResponse(rsp *http.Response) (*DeleteProc
 	return response, nil
 }
 
-// ParseTestStartCpuProfileResponse parses an HTTP response from a TestStartCpuProfileWithResponse call
-func ParseTestStartCpuProfileResponse(rsp *http.Response) (*TestStartCpuProfileResponse, error) {
+// ParseTestStartPprofServerResponse parses an HTTP response from a TestStartPprofServerWithResponse call
+func ParseTestStartPprofServerResponse(rsp *http.Response) (*TestStartPprofServerResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
 	defer func() { _ = rsp.Body.Close() }()
 	if err != nil {
 		return nil, err
 	}
 
-	response := &TestStartCpuProfileResponse{
+	response := &TestStartPprofServerResponse{
 		Body:         bodyBytes,
 		HTTPResponse: rsp,
 	}
@@ -5192,29 +6458,20 @@ func ParseTestStartCpuProfileResponse(rsp *http.Response) (*TestStartCpuProfileR
 	return response, nil
 }
 
-// ParseTestStopCpuProfileResponse parses an HTTP response from a TestStopCpuProfileWithResponse call
-func ParseTestStopCpuProfileResponse(rsp *http.Response) (*TestStopCpuProfileResponse, error) {
+// ParseTestStopPprofServerResponse parses an HTTP response from a TestStopPprofServerWithResponse call
+func ParseTestStopPprofServerResponse(rsp *http.Response) (*TestStopPprofServerResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
 	defer func() { _ = rsp.Body.Close() }()
 	if err != nil {
 		return nil, err
 	}
 
-	response := &TestStopCpuProfileResponse{
+	response := &TestStopPprofServerResponse{
 		Body:         bodyBytes,
 		HTTPResponse: rsp,
 	}
 
 	switch {
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest struct {
-			Pprof *[]byte `json:"pprof,omitempty"`
-		}
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON200 = &dest
-
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest Error
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {

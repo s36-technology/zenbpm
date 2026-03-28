@@ -123,51 +123,6 @@ func (q *Queries) FindInactiveInstancesToDelete(ctx context.Context, arg FindIna
 	return items, nil
 }
 
-const findProcessByParentExecutionToken = `-- name: FindProcessByParentExecutionToken :many
-SELECT
-    "key", process_definition_key, business_key, created_at, state, variables, parent_process_execution_token, parent_process_target_element_id, parent_process_target_element_instance_key, process_type, history_ttl_sec, history_delete_sec
-FROM
-    process_instance
-WHERE
-    parent_process_execution_token = ?1
-`
-
-func (q *Queries) FindProcessByParentExecutionToken(ctx context.Context, parentProcessExecutionToken sql.NullInt64) ([]ProcessInstance, error) {
-	rows, err := q.db.QueryContext(ctx, findProcessByParentExecutionToken, parentProcessExecutionToken)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ProcessInstance{}
-	for rows.Next() {
-		var i ProcessInstance
-		if err := rows.Scan(
-			&i.Key,
-			&i.ProcessDefinitionKey,
-			&i.BusinessKey,
-			&i.CreatedAt,
-			&i.State,
-			&i.Variables,
-			&i.ParentProcessExecutionToken,
-			&i.ParentProcessTargetElementID,
-			&i.ParentProcessTargetElementInstanceKey,
-			&i.ProcessType,
-			&i.HistoryTtlSec,
-			&i.HistoryDeleteSec,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const findProcessInstancesPage = `-- name: FindProcessInstancesPage :many
 SELECT
     pi."key", pi.process_definition_key, pi.business_key, pi.created_at, pi.state, pi.variables, pi.parent_process_execution_token, pi.parent_process_target_element_id, pi.parent_process_target_element_instance_key, pi.process_type, pi.history_ttl_sec, pi.history_delete_sec, pd.bpmn_process_id,
@@ -259,6 +214,8 @@ ORDER BY
   CASE CAST(?1 AS TEXT) WHEN 'key_desc' THEN pi."key" END DESC,
   CASE CAST(?1 AS TEXT) WHEN 'state_asc' THEN pi.state END ASC,
   CASE CAST(?1 AS TEXT) WHEN 'state_desc' THEN pi.state END DESC,
+  CASE CAST(?1 AS TEXT) WHEN 'businessKey_asc'  THEN pi.business_key END ASC,
+  CASE CAST(?1 AS TEXT) WHEN 'businessKey_desc' THEN pi.business_key END DESC,
   pi.created_at DESC
 
 LIMIT ?15 OFFSET ?14
@@ -341,6 +298,146 @@ func (q *Queries) FindProcessInstancesPage(ctx context.Context, arg FindProcessI
 			&i.BpmnProcessID,
 			&i.TotalCount,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const findProcessesByParentExecutionToken = `-- name: FindProcessesByParentExecutionToken :many
+SELECT
+    "key", process_definition_key, business_key, created_at, state, variables, parent_process_execution_token, parent_process_target_element_id, parent_process_target_element_instance_key, process_type, history_ttl_sec, history_delete_sec
+FROM
+    process_instance
+WHERE
+    parent_process_execution_token = ?1
+`
+
+func (q *Queries) FindProcessesByParentExecutionToken(ctx context.Context, parentProcessExecutionToken sql.NullInt64) ([]ProcessInstance, error) {
+	rows, err := q.db.QueryContext(ctx, findProcessesByParentExecutionToken, parentProcessExecutionToken)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ProcessInstance{}
+	for rows.Next() {
+		var i ProcessInstance
+		if err := rows.Scan(
+			&i.Key,
+			&i.ProcessDefinitionKey,
+			&i.BusinessKey,
+			&i.CreatedAt,
+			&i.State,
+			&i.Variables,
+			&i.ParentProcessExecutionToken,
+			&i.ParentProcessTargetElementID,
+			&i.ParentProcessTargetElementInstanceKey,
+			&i.ProcessType,
+			&i.HistoryTtlSec,
+			&i.HistoryDeleteSec,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getElementStatisticsByProcessInstanceKey = `-- name: GetElementStatisticsByProcessInstanceKey :many
+WITH relevant_instances AS (
+    -- The given instance itself
+    SELECT ?1 AS "key"
+    UNION ALL
+    -- Plus any active multi-instance child process instances
+    SELECT pi_child.key
+    FROM process_instance AS pi_child
+             JOIN execution_token AS et ON pi_child.parent_process_execution_token = et.key
+    WHERE et.process_instance_key = ?1
+      AND pi_child.process_type = 4  -- ProcessTypeMultiInstance
+      AND pi_child.state = 1         -- Active
+),
+active_tokens AS (
+    SELECT
+        et.element_id,
+        COUNT(*) AS active_count,
+        0         AS incident_count
+    FROM
+        execution_token AS et
+    WHERE
+        et.process_instance_key IN (SELECT "key" FROM relevant_instances)
+        AND et.state IN (1, 2) -- TokenStateRunning, TokenStateWaiting
+        AND NOT EXISTS (
+            SELECT 1 FROM process_instance AS child
+            WHERE child.parent_process_execution_token = et.key
+              AND child.process_type = 4
+              AND child.state = 1
+        )
+    GROUP BY
+        et.element_id
+),
+active_incidents AS (
+    SELECT
+        i.element_id,
+        0         AS active_count,
+        COUNT(*) AS incident_count
+    FROM
+        incident AS i
+    WHERE
+        i.process_instance_key IN (SELECT "key" FROM relevant_instances)
+        AND i.resolved_at IS NULL
+        AND NOT EXISTS (
+            SELECT 1 FROM process_instance AS child
+            WHERE child.parent_process_execution_token = i.execution_token
+              AND child.process_type = 4
+              AND child.state = 1
+        )
+    GROUP BY
+        i.element_id
+),
+combined AS (
+    SELECT element_id, active_count, incident_count FROM active_tokens
+    UNION ALL
+    SELECT element_id, active_count, incident_count FROM active_incidents
+)
+SELECT
+    element_id,
+    CAST(SUM(active_count)   AS INTEGER) AS active_count,
+    CAST(SUM(incident_count) AS INTEGER) AS incident_count
+FROM
+    combined
+GROUP BY
+    element_id
+`
+
+type GetElementStatisticsByProcessInstanceKeyRow struct {
+	ElementID     string `json:"element_id"`
+	ActiveCount   int64  `json:"active_count"`
+	IncidentCount int64  `json:"incident_count"`
+}
+
+func (q *Queries) GetElementStatisticsByProcessInstanceKey(ctx context.Context, processInstanceKey int64) ([]GetElementStatisticsByProcessInstanceKeyRow, error) {
+	rows, err := q.db.QueryContext(ctx, getElementStatisticsByProcessInstanceKey, processInstanceKey)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []GetElementStatisticsByProcessInstanceKeyRow{}
+	for rows.Next() {
+		var i GetElementStatisticsByProcessInstanceKeyRow
+		if err := rows.Scan(&i.ElementID, &i.ActiveCount, &i.IncidentCount); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

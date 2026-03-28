@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/pbinitiative/zenbpm/pkg/bpmn/runtime"
+	"github.com/pbinitiative/zenbpm/pkg/storage"
 	"github.com/pbinitiative/zenbpm/pkg/storage/inmemory"
 	"github.com/stretchr/testify/assert"
 )
@@ -25,8 +26,8 @@ func TestExclusiveGatewayWithExpressionsNoOutgoingCreatesIncident(t *testing.T) 
 	}
 
 	// when
-	instance, zerr := bpmnEngine.CreateInstanceByKey(t.Context(), process.Key, variables)
-	assert.Error(t, zerr)
+	instance, err := bpmnEngine.CreateInstanceByKey(t.Context(), process.Key, variables)
+	assert.Error(t, err)
 
 	// then
 	incidents, err := bpmnEngine.persistence.FindIncidentsByProcessInstanceKey(t.Context(), instance.ProcessInstance().Key)
@@ -58,8 +59,8 @@ func TestExclusiveGatewayWithExpressionsNoOutgoingResolvesIncident(t *testing.T)
 	}
 
 	// when
-	instance, zerr := bpmnEngine.CreateInstanceByKey(t.Context(), process.Key, variables)
-	assert.Error(t, zerr)
+	instance, err := bpmnEngine.CreateInstanceByKey(t.Context(), process.Key, variables)
+	assert.Error(t, err)
 
 	incidents, err := bpmnEngine.persistence.FindIncidentsByProcessInstanceKey(t.Context(), instance.ProcessInstance().Key)
 	assert.NoError(t, err)
@@ -81,4 +82,15 @@ func TestExclusiveGatewayWithExpressionsNoOutgoingResolvesIncident(t *testing.T)
 	assert.NoError(t, err)
 	assert.NotEmpty(t, incident.ResolvedAt)
 
+}
+
+func TestResolveIncidentReturnsErrNotFound(t *testing.T) {
+	store := inmemory.NewStorage()
+	bpmnEngine := NewEngine(EngineWithStorage(store))
+
+	var nonExistingKey int64 = -1
+	err := bpmnEngine.ResolveIncident(t.Context(), nonExistingKey)
+
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, storage.ErrNotFound)
 }

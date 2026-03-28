@@ -144,11 +144,13 @@ ORDER BY
   CASE CAST(?1 AS TEXT) WHEN 'key_desc' THEN pi."key" END DESC,
   CASE CAST(?1 AS TEXT) WHEN 'state_asc' THEN pi.state END ASC,
   CASE CAST(?1 AS TEXT) WHEN 'state_desc' THEN pi.state END DESC,
+  CASE CAST(?1 AS TEXT) WHEN 'businessKey_asc'  THEN pi.business_key END ASC,
+  CASE CAST(?1 AS TEXT) WHEN 'businessKey_desc' THEN pi.business_key END DESC,
   pi.created_at DESC
 
 LIMIT @size OFFSET @offset;
 
--- name: FindProcessByParentExecutionToken :many
+-- name: FindProcessesByParentExecutionToken :many
 SELECT
     *
 FROM
@@ -171,3 +173,68 @@ FROM
     process_instance
 WHERE
     state = 1;
+
+-- name: GetElementStatisticsByProcessInstanceKey :many
+WITH relevant_instances AS (
+    -- The given instance itself
+    SELECT @process_instance_key AS "key"
+    UNION ALL
+    -- Plus any active multi-instance child process instances
+    SELECT pi_child.key
+    FROM process_instance AS pi_child
+             JOIN execution_token AS et ON pi_child.parent_process_execution_token = et.key
+    WHERE et.process_instance_key = @process_instance_key
+      AND pi_child.process_type = 4  -- ProcessTypeMultiInstance
+      AND pi_child.state = 1         -- Active
+),
+active_tokens AS (
+    SELECT
+        et.element_id,
+        COUNT(*) AS active_count,
+        0         AS incident_count
+    FROM
+        execution_token AS et
+    WHERE
+        et.process_instance_key IN (SELECT "key" FROM relevant_instances)
+        AND et.state IN (1, 2) -- TokenStateRunning, TokenStateWaiting
+        AND NOT EXISTS (
+            SELECT 1 FROM process_instance AS child
+            WHERE child.parent_process_execution_token = et.key
+              AND child.process_type = 4
+              AND child.state = 1
+        )
+    GROUP BY
+        et.element_id
+),
+active_incidents AS (
+    SELECT
+        i.element_id,
+        0         AS active_count,
+        COUNT(*) AS incident_count
+    FROM
+        incident AS i
+    WHERE
+        i.process_instance_key IN (SELECT "key" FROM relevant_instances)
+        AND i.resolved_at IS NULL
+        AND NOT EXISTS (
+            SELECT 1 FROM process_instance AS child
+            WHERE child.parent_process_execution_token = i.execution_token
+              AND child.process_type = 4
+              AND child.state = 1
+        )
+    GROUP BY
+        i.element_id
+),
+combined AS (
+    SELECT element_id, active_count, incident_count FROM active_tokens
+    UNION ALL
+    SELECT element_id, active_count, incident_count FROM active_incidents
+)
+SELECT
+    element_id,
+    CAST(SUM(active_count)   AS INTEGER) AS active_count,
+    CAST(SUM(incident_count) AS INTEGER) AS incident_count
+FROM
+    combined
+GROUP BY
+    element_id;

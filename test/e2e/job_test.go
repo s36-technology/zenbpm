@@ -4,16 +4,15 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/pbinitiative/zenbpm/internal/rest/public"
 	"github.com/pbinitiative/zenbpm/pkg/ptr"
 	"github.com/pbinitiative/zenbpm/pkg/zenclient"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestRestApiJob(t *testing.T) {
-	var instance public.ProcessInstance
+	var instance zenclient.ProcessInstance
 	var definition zenclient.ProcessDefinitionSimple
-	err := deployDefinition(t, "service-task-input-output.bpmn")
+	_, err := deployDefinition(t, "service-task-input-output.bpmn")
 	assert.NoError(t, err)
 	definitions, err := listProcessDefinitions(t)
 	assert.NoError(t, err)
@@ -23,14 +22,14 @@ func TestRestApiJob(t *testing.T) {
 			break
 		}
 	}
-	instance, err = createProcessInstance(t, definition.Key, map[string]any{
+	instance, err = createProcessInstance(t, &definition.Key, map[string]any{
 		"testVar": 123,
 	})
 	assert.NoError(t, err)
 	assert.NotEmpty(t, instance.Key)
 
 	var jobToComplete zenclient.Job
-	var jobsProcessInstance public.ProcessInstance
+	var jobsProcessInstance zenclient.ProcessInstance
 	t.Run("read waiting jobs", func(t *testing.T) {
 		jobsPartitionPage, err := readWaitingJobs(t, "input-task-1")
 		assert.NoError(t, err)
@@ -57,7 +56,7 @@ func TestRestApiJob(t *testing.T) {
 		assert.Equal(t, "test", jobsProcessInstance.Variables["dstcity"])
 	})
 
-	instance2, err := createProcessInstance(t, definition.Key, map[string]any{
+	instance2, err := createProcessInstance(t, &definition.Key, map[string]any{
 		"testVar": 124,
 	})
 	assert.NoError(t, err)
@@ -118,6 +117,21 @@ func TestRestApiJob(t *testing.T) {
 
 }
 
+func TestRestApiJobBadRequestResponse(t *testing.T) {
+	t.Run("test BadRequest response", func(t *testing.T) {
+		response, _ := app.restClient.GetJobsWithResponse(t.Context(), &zenclient.GetJobsParams{
+			State: (*zenclient.JobState)(ptr.To("non-existing-state")),
+		})
+		assert.Nil(t, response.JSON200)
+		assert.NotNil(t, response.JSON400)
+		assert.Equal(t, "BAD_REQUEST", response.JSON400.Code)
+		assert.Equal(t,
+			"unexpected GetJobsRequest state: non-existing-state, supported: [active completed terminated]",
+			response.JSON400.Message,
+		)
+	})
+}
+
 func readWaitingJobs(t testing.TB, jobType string) (zenclient.JobPartitionPage, error) {
 	return getJobs(t, zenclient.GetJobsParams{JobType: &jobType, State: ptr.To(zenclient.JobStateActive)})
 }
@@ -141,6 +155,7 @@ func completeJob(t testing.TB, job zenclient.Job, vars map[string]any) error {
 	response, err := app.restClient.CompleteJobWithResponse(t.Context(), job.Key, zenclient.CompleteJobJSONRequestBody{
 		Variables: &vars,
 	})
+	assert.NoError(t, err)
 	if response.StatusCode() != 201 {
 		return fmt.Errorf("status should be 201")
 	}

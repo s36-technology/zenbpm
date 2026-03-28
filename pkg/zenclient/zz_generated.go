@@ -133,9 +133,10 @@ const (
 
 // Defines values for GetProcessInstancesParamsSortBy.
 const (
-	GetProcessInstancesParamsSortByCreatedAt GetProcessInstancesParamsSortBy = "createdAt"
-	GetProcessInstancesParamsSortByKey       GetProcessInstancesParamsSortBy = "key"
-	GetProcessInstancesParamsSortByState     GetProcessInstancesParamsSortBy = "state"
+	GetProcessInstancesParamsSortByBusinessKey GetProcessInstancesParamsSortBy = "businessKey"
+	GetProcessInstancesParamsSortByCreatedAt   GetProcessInstancesParamsSortBy = "createdAt"
+	GetProcessInstancesParamsSortByKey         GetProcessInstancesParamsSortBy = "key"
+	GetProcessInstancesParamsSortByState       GetProcessInstancesParamsSortBy = "state"
 )
 
 // Defines values for GetProcessInstancesParamsSortOrder.
@@ -933,12 +934,17 @@ type GetProcessInstancesParamsState string
 
 // CreateProcessInstanceJSONBody defines parameters for CreateProcessInstance.
 type CreateProcessInstanceJSONBody struct {
+	// BpmnProcessId Start the process instance using latest bpmn process definition identified by bpmnProcessId.
+	BpmnProcessId *string `json:"bpmnProcessId,omitempty"`
+
 	// BusinessKey Business key of the process instance used mainly for correlating process instance to the business entity.
 	BusinessKey *string `json:"businessKey,omitempty"`
 
 	// HistoryTimeToLive Duration for which process instance data are kept in storage after the process instance ends. If omitted the default will be picked up from engine configuration. (1d8h, 1M5d8h)
-	HistoryTimeToLive    *string                 `json:"historyTimeToLive,omitempty"`
-	ProcessDefinitionKey int64                   `json:"processDefinitionKey"`
+	HistoryTimeToLive *string `json:"historyTimeToLive,omitempty"`
+
+	// ProcessDefinitionKey Start the process instance using bpmn process definition identified by processDefinitionKey. ( Takes priority )
+	ProcessDefinitionKey *int64                  `json:"processDefinitionKey,omitempty"`
 	Variables            *map[string]interface{} `json:"variables,omitempty"`
 }
 
@@ -1201,6 +1207,9 @@ type ClientInterface interface {
 
 	// GetProcessInstanceJobs request
 	GetProcessInstanceJobs(ctx context.Context, processInstanceKey int64, params *GetProcessInstanceJobsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetProcessInstanceElementStatistics request
+	GetProcessInstanceElementStatistics(ctx context.Context, processInstanceKey int64, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// UpdateProcessInstanceVariablesWithBody request with any body
 	UpdateProcessInstanceVariablesWithBody(ctx context.Context, processInstanceKey int64, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -1615,6 +1624,18 @@ func (c *Client) GetIncidents(ctx context.Context, processInstanceKey int64, par
 
 func (c *Client) GetProcessInstanceJobs(ctx context.Context, processInstanceKey int64, params *GetProcessInstanceJobsParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetProcessInstanceJobsRequest(c.Server, processInstanceKey, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetProcessInstanceElementStatistics(ctx context.Context, processInstanceKey int64, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetProcessInstanceElementStatisticsRequest(c.Server, processInstanceKey)
 	if err != nil {
 		return nil, err
 	}
@@ -3682,6 +3703,40 @@ func NewGetProcessInstanceJobsRequest(server string, processInstanceKey int64, p
 	return req, nil
 }
 
+// NewGetProcessInstanceElementStatisticsRequest generates requests for GetProcessInstanceElementStatistics
+func NewGetProcessInstanceElementStatisticsRequest(server string, processInstanceKey int64) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "processInstanceKey", runtime.ParamLocationPath, processInstanceKey)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/process-instances/%s/statistics", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 // NewUpdateProcessInstanceVariablesRequest calls the generic UpdateProcessInstanceVariables builder with application/json body
 func NewUpdateProcessInstanceVariablesRequest(server string, processInstanceKey int64, body UpdateProcessInstanceVariablesJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
@@ -3976,6 +4031,9 @@ type ClientWithResponsesInterface interface {
 	// GetProcessInstanceJobsWithResponse request
 	GetProcessInstanceJobsWithResponse(ctx context.Context, processInstanceKey int64, params *GetProcessInstanceJobsParams, reqEditors ...RequestEditorFn) (*GetProcessInstanceJobsResponse, error)
 
+	// GetProcessInstanceElementStatisticsWithResponse request
+	GetProcessInstanceElementStatisticsWithResponse(ctx context.Context, processInstanceKey int64, reqEditors ...RequestEditorFn) (*GetProcessInstanceElementStatisticsResponse, error)
+
 	// UpdateProcessInstanceVariablesWithBodyWithResponse request with any body
 	UpdateProcessInstanceVariablesWithBodyWithResponse(ctx context.Context, processInstanceKey int64, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpdateProcessInstanceVariablesResponse, error)
 
@@ -3995,7 +4053,10 @@ type EvaluateDecisionResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON200      *EvaluatedDRDResult
+	JSON400      *Error
+	JSON404      *Error
 	JSON500      *Error
+	JSON502      *Error
 }
 
 // Status returns HTTPResponse.Status
@@ -4043,6 +4104,7 @@ type GetDecisionInstanceResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON200      *DecisionInstanceDetail
+	JSON404      *Error
 	JSON500      *Error
 	JSON502      *Error
 }
@@ -4067,6 +4129,8 @@ type GetDmnResourceDefinitionsResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON200      *DmnResourceDefinitionsPage
+	JSON400      *Error
+	JSON500      *Error
 	JSON502      *Error
 }
 
@@ -4094,6 +4158,7 @@ type CreateDmnResourceDefinitionResponse struct {
 	}
 	JSON400 *Error
 	JSON409 *Error
+	JSON500 *Error
 	JSON502 *Error
 }
 
@@ -4118,6 +4183,8 @@ type GetDmnResourceDefinitionResponse struct {
 	HTTPResponse *http.Response
 	JSON200      *DmnResourceDefinitionDetail
 	JSON400      *Error
+	JSON404      *Error
+	JSON500      *Error
 	JSON502      *Error
 }
 
@@ -4141,6 +4208,8 @@ type ResolveIncidentResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON400      *Error
+	JSON404      *Error
+	JSON500      *Error
 	JSON502      *Error
 }
 
@@ -4164,6 +4233,7 @@ type GetJobsResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON200      *JobPartitionPage
+	JSON400      *Error
 	JSON500      *Error
 	JSON502      *Error
 }
@@ -4238,6 +4308,8 @@ type CompleteJobResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON400      *Error
+	JSON404      *Error
+	JSON500      *Error
 	JSON502      *Error
 }
 
@@ -4261,6 +4333,8 @@ type PublishMessageResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON400      *Error
+	JSON404      *Error
+	JSON500      *Error
 	JSON502      *Error
 }
 
@@ -4665,6 +4739,32 @@ func (r GetProcessInstanceJobsResponse) StatusCode() int {
 	return 0
 }
 
+type GetProcessInstanceElementStatisticsResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *ElementStatisticsPartitions
+	JSON400      *Error
+	JSON404      *Error
+	JSON500      *Error
+	JSON502      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r GetProcessInstanceElementStatisticsResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetProcessInstanceElementStatisticsResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
 type UpdateProcessInstanceVariablesResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -5060,6 +5160,15 @@ func (c *ClientWithResponses) GetProcessInstanceJobsWithResponse(ctx context.Con
 	return ParseGetProcessInstanceJobsResponse(rsp)
 }
 
+// GetProcessInstanceElementStatisticsWithResponse request returning *GetProcessInstanceElementStatisticsResponse
+func (c *ClientWithResponses) GetProcessInstanceElementStatisticsWithResponse(ctx context.Context, processInstanceKey int64, reqEditors ...RequestEditorFn) (*GetProcessInstanceElementStatisticsResponse, error) {
+	rsp, err := c.GetProcessInstanceElementStatistics(ctx, processInstanceKey, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetProcessInstanceElementStatisticsResponse(rsp)
+}
+
 // UpdateProcessInstanceVariablesWithBodyWithResponse request with arbitrary body returning *UpdateProcessInstanceVariablesResponse
 func (c *ClientWithResponses) UpdateProcessInstanceVariablesWithBodyWithResponse(ctx context.Context, processInstanceKey int64, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpdateProcessInstanceVariablesResponse, error) {
 	rsp, err := c.UpdateProcessInstanceVariablesWithBody(ctx, processInstanceKey, contentType, body, reqEditors...)
@@ -5125,12 +5234,33 @@ func ParseEvaluateDecisionResponse(rsp *http.Response) (*EvaluateDecisionRespons
 		}
 		response.JSON200 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest Error
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
 		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 502:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON502 = &dest
 
 	}
 
@@ -5205,6 +5335,13 @@ func ParseGetDecisionInstanceResponse(rsp *http.Response) (*GetDecisionInstanceR
 		}
 		response.JSON200 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest Error
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -5244,6 +5381,20 @@ func ParseGetDmnResourceDefinitionsResponse(rsp *http.Response) (*GetDmnResource
 			return nil, err
 		}
 		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 502:
 		var dest Error
@@ -5294,6 +5445,13 @@ func ParseCreateDmnResourceDefinitionResponse(rsp *http.Response) (*CreateDmnRes
 		}
 		response.JSON409 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 502:
 		var dest Error
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -5334,6 +5492,20 @@ func ParseGetDmnResourceDefinitionResponse(rsp *http.Response) (*GetDmnResourceD
 		}
 		response.JSON400 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 502:
 		var dest Error
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -5367,6 +5539,20 @@ func ParseResolveIncidentResponse(rsp *http.Response) (*ResolveIncidentResponse,
 		}
 		response.JSON400 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 502:
 		var dest Error
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -5399,6 +5585,13 @@ func ParseGetJobsResponse(rsp *http.Response) (*GetJobsResponse, error) {
 			return nil, err
 		}
 		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest Error
@@ -5534,6 +5727,20 @@ func ParseCompleteJobResponse(rsp *http.Response) (*CompleteJobResponse, error) 
 		}
 		response.JSON400 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 502:
 		var dest Error
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -5566,6 +5773,20 @@ func ParsePublishMessageResponse(rsp *http.Response) (*PublishMessageResponse, e
 			return nil, err
 		}
 		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 502:
 		var dest Error
@@ -6304,6 +6525,60 @@ func ParseGetProcessInstanceJobsResponse(rsp *http.Response) (*GetProcessInstanc
 			return nil, err
 		}
 		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 502:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON502 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetProcessInstanceElementStatisticsResponse parses an HTTP response from a GetProcessInstanceElementStatisticsWithResponse call
+func ParseGetProcessInstanceElementStatisticsResponse(rsp *http.Response) (*GetProcessInstanceElementStatisticsResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetProcessInstanceElementStatisticsResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest ElementStatisticsPartitions
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest Error

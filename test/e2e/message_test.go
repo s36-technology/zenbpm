@@ -1,22 +1,21 @@
 package e2e
 
 import (
-	"encoding/json"
 	"fmt"
-	"github.com/pbinitiative/zenbpm/internal/rest/public"
+	"testing"
+
 	"github.com/pbinitiative/zenbpm/pkg/ptr"
 	"github.com/pbinitiative/zenbpm/pkg/zenclient"
 	"github.com/stretchr/testify/assert"
-	"testing"
 )
 
 // TODO: Test with multiple partitions/nodes
 func TestRestApiMessage(t *testing.T) {
 	cleanProcessInstances(t)
 
-	var instance public.ProcessInstance
+	var instance zenclient.ProcessInstance
 	var definition zenclient.ProcessDefinitionSimple
-	err := deployDefinition(t, "message-intermediate-catch-event.bpmn")
+	_, err := deployDefinition(t, "message-intermediate-catch-event.bpmn")
 	assert.NoError(t, err)
 	definitions, err := listProcessDefinitions(t)
 	assert.NoError(t, err)
@@ -26,17 +25,17 @@ func TestRestApiMessage(t *testing.T) {
 			break
 		}
 	}
-	instance, err = createProcessInstance(t, definition.Key, map[string]any{
+	instance, err = createProcessInstance(t, &definition.Key, map[string]any{
 		"testVar": 123,
 	})
 	assert.NoError(t, err)
 	assert.NotEmpty(t, instance.Key)
 
-	failedInstance, err := createProcessInstance(t, definition.Key, map[string]any{
+	failedInstance, err := createProcessInstance(t, &definition.Key, map[string]any{
 		"testVar": 123,
 	})
 	assert.NoError(t, err)
-	assert.Equal(t, public.ProcessInstanceStateFailed, failedInstance.State)
+	assert.Equal(t, zenclient.ProcessInstanceStateFailed, failedInstance.State)
 
 	t.Run("publish message standard process", func(t *testing.T) {
 		err := publishMessage(t, "globalMsgRef", "correlation-key-one", &map[string]any{
@@ -55,7 +54,7 @@ func TestRestApiMessage(t *testing.T) {
 		})
 		assert.Error(t, err)
 
-		_, err = createProcessInstance(t, definition.Key, map[string]any{
+		_, err = createProcessInstance(t, &definition.Key, map[string]any{
 			"testVar": 123,
 		})
 		assert.NoError(t, err)
@@ -64,7 +63,7 @@ func TestRestApiMessage(t *testing.T) {
 		multiInstanceDefinition, err := deployGetUniqueDefinition(t, "multi_instance_service_task.bpmn")
 		assert.NoError(t, err)
 
-		instance, err = createProcessInstance(t, multiInstanceDefinition.Key, map[string]any{
+		instance, err = createProcessInstance(t, &multiInstanceDefinition.Key, map[string]any{
 			"testInputCollection": []string{"test1", "test2", "test3"},
 		})
 		assert.NoError(t, err)
@@ -85,7 +84,7 @@ func TestRestApiMessage(t *testing.T) {
 		})
 		assert.Error(t, err)
 
-		_, err = createProcessInstance(t, definition.Key, map[string]any{
+		_, err = createProcessInstance(t, &definition.Key, map[string]any{
 			"testVar": 123,
 		})
 		assert.NoError(t, err)
@@ -94,10 +93,10 @@ func TestRestApiMessage(t *testing.T) {
 	t.Run("publish message call activity", func(t *testing.T) {
 		callActivityDefinition, err := deployGetUniqueDefinition(t, "call-activity-simple.bpmn")
 		assert.NoError(t, err)
-		err = deployDefinition(t, "simple_task.bpmn")
+		_, err = deployDefinition(t, "simple_task.bpmn")
 		assert.NoError(t, err)
 
-		instance, err = createProcessInstance(t, callActivityDefinition.Key, map[string]any{
+		instance, err = createProcessInstance(t, &callActivityDefinition.Key, map[string]any{
 			"testVar": 123,
 		})
 		assert.NoError(t, err)
@@ -119,7 +118,7 @@ func TestRestApiMessage(t *testing.T) {
 		})
 		assert.Error(t, err)
 
-		_, err = createProcessInstance(t, definition.Key, map[string]any{
+		_, err = createProcessInstance(t, &definition.Key, map[string]any{
 			"testVar": 123,
 		})
 		assert.NoError(t, err)
@@ -129,7 +128,7 @@ func TestRestApiMessage(t *testing.T) {
 		subprocessDefinition, err := deployGetUniqueDefinition(t, "simple_sub_process_task.bpmn")
 		assert.NoError(t, err)
 
-		instance, err = createProcessInstance(t, subprocessDefinition.Key, map[string]any{
+		instance, err = createProcessInstance(t, &subprocessDefinition.Key, map[string]any{
 			"testVar": 123,
 		})
 		assert.NoError(t, err)
@@ -151,7 +150,7 @@ func TestRestApiMessage(t *testing.T) {
 		})
 		assert.Error(t, err)
 
-		_, err = createProcessInstance(t, definition.Key, map[string]any{
+		_, err = createProcessInstance(t, &definition.Key, map[string]any{
 			"testVar": 123,
 		})
 		assert.NoError(t, err)
@@ -161,7 +160,7 @@ func TestRestApiMessage(t *testing.T) {
 		def, err := deployGetUniqueDefinition(t, "message-boundary-task-loop.bpmn")
 		assert.NoError(t, err)
 
-		instance, err := createProcessInstance(t, def.Key, map[string]any{
+		instance, err := createProcessInstance(t, &def.Key, map[string]any{
 			"testInputCollection": []string{"test1", "test2", "test3"},
 		})
 		assert.NoError(t, err)
@@ -207,23 +206,68 @@ func TestRestApiMessage(t *testing.T) {
 	})
 }
 
+func TestPublishMessageNotFound(t *testing.T) {
+	t.Run("publish message with non-existing correlationKey returns NOT_FOUND", func(t *testing.T) {
+		response, err := publishMessageWithResponse(t, "nonExistingMessage", "non-existing-correlation-key", nil)
+		assert.NoError(t, err)
+		assert.Equal(t, 404, response.StatusCode())
+		assert.Nil(t, response.JSON502)
+		assert.NotNil(t, response.JSON404)
+		assert.Equal(t, "NOT_FOUND", response.JSON404.Code)
+	})
+
+	t.Run("publish message with non-existing messageName returns NOT_FOUND", func(t *testing.T) {
+		_, err := deployDefinition(t, "message-intermediate-catch-event.bpmn")
+		assert.NoError(t, err)
+		definitions, err := listProcessDefinitions(t)
+		assert.NoError(t, err)
+		var definitionKey int64
+		for _, def := range definitions {
+			if def.BpmnProcessId == "message-intermediate-catch-event" {
+				definitionKey = def.Key
+				break
+			}
+		}
+		_, err = createProcessInstance(t, &definitionKey, map[string]any{"testVar": 123})
+		assert.NoError(t, err)
+
+		response, err := publishMessageWithResponse(t, "nonExistingMessageName", "correlation-key-one", nil)
+		assert.NoError(t, err)
+		assert.Equal(t, 404, response.StatusCode())
+		assert.Nil(t, response.JSON502)
+		assert.NotNil(t, response.JSON404)
+		assert.Equal(t, "NOT_FOUND", response.JSON404.Code)
+	})
+}
+
 func publishMessage(t testing.TB, name string, correlationKey string, vars *map[string]any) error {
-	respBody, status, _, err := app.NewRequest(t).
-		WithPath("/v1/messages").
-		WithMethod("POST").
-		WithBody(public.PublishMessageJSONBody{
-			CorrelationKey: correlationKey,
-			MessageName:    name,
-			Variables:      vars,
-		}).
-		Do()
+	response, err := publishMessageWithResponse(t, name, correlationKey, vars)
 	if err != nil {
 		return fmt.Errorf("failed to publish message: %w", err)
 	}
-	if status != 201 {
-		unmarshalledResp := public.PublishMessage502JSONResponse{}
-		err = json.Unmarshal(respBody, &unmarshalledResp)
-		return fmt.Errorf("failed to publish message expected status 201 got %d:%s", status, unmarshalledResp.Message)
+	if response.StatusCode() != 201 {
+		var errMsg string
+		if response.JSON400 != nil {
+			errMsg = response.JSON400.Message
+		} else if response.JSON404 != nil {
+			errMsg = response.JSON404.Message
+		} else if response.JSON500 != nil {
+			errMsg = response.JSON500.Message
+		} else if response.JSON502 != nil {
+			errMsg = response.JSON502.Message
+		}
+		if errMsg != "" {
+			return fmt.Errorf("failed to publish message, expected status 201 got %d: %s", response.StatusCode(), errMsg)
+		}
+		return fmt.Errorf("failed to publish message, expected status 201 got %d", response.StatusCode())
 	}
 	return nil
+}
+
+func publishMessageWithResponse(t testing.TB, name string, correlationKey string, vars *map[string]any) (*zenclient.PublishMessageResponse, error) {
+	return app.restClient.PublishMessageWithResponse(t.Context(), zenclient.PublishMessageJSONRequestBody{
+		CorrelationKey: correlationKey,
+		MessageName:    name,
+		Variables:      vars,
+	})
 }

@@ -24,13 +24,18 @@ import (
 	"github.com/pbinitiative/zenbpm/internal/config"
 	"github.com/pbinitiative/zenbpm/internal/sql"
 	"github.com/pbinitiative/zenbpm/pkg/bpmn/runtime"
+	dmnruntime "github.com/pbinitiative/zenbpm/pkg/dmn/runtime"
 	"github.com/pbinitiative/zenbpm/pkg/ptr"
+	"github.com/pbinitiative/zenbpm/pkg/storage"
 	"github.com/pbinitiative/zenbpm/pkg/storage/storagetest"
-	"github.com/rqlite/rqlite/v8/command/proto"
 	"github.com/stretchr/testify/assert"
 )
 
-func prepareTestSetup(t *testing.T) (*ZenPartitionNode, config.Persistence, *client.ClientManager, *testStore, *servertest.TestServer) {
+func prepareTestSetupWithTestMigration(t *testing.T) (*ZenPartitionNode, config.Persistence, *client.ClientManager, *testStore, *servertest.TestServer) {
+	return prepareTestSetup(t, true)
+}
+
+func prepareTestSetup(t *testing.T, runMigrationWithRollback bool) (*ZenPartitionNode, config.Persistence, *client.ClientManager, *testStore, *servertest.TestServer) {
 	ctx := context.Background()
 	mux, muxLn, err := network.NewNodeMux("")
 	if err != nil {
@@ -42,10 +47,17 @@ func prepareTestSetup(t *testing.T) (*ZenPartitionNode, config.Persistence, *cli
 		t.TempDir(),
 		[]string{muxLn.Addr().String()},
 	)
+
+	migrationDir := ""
+	if runMigrationWithRollback {
+		migrationDir = "internal/cluster/partition/testdata/migrations_test"
+	}
+
 	conf := config.Persistence{
 		RqLite:           &c,
 		ProcDefCacheTTL:  types.TTL(24 * time.Hour),
 		ProcDefCacheSize: 200,
+		Migration:        config.Migration{Dir: migrationDir},
 	}
 
 	ts := servertest.NewTestServer()
@@ -100,36 +112,22 @@ func prepareTestSetup(t *testing.T) (*ZenPartitionNode, config.Persistence, *cli
 	if err != nil {
 		t.Fatalf("failed to create partition node: %s", err)
 	}
-	migrations, err := sql.GetMigrations()
-	if err != nil {
-		t.Fatalf("failed to get migrations: %s", err)
-	}
-	stmts := make([]*proto.Statement, len(migrations))
-	for i, mig := range migrations {
-		stmts[i] = &proto.Statement{
-			Sql: mig.SQL,
-		}
-	}
 	_, err = partition.WaitForLeader(5 * time.Second)
 	if err != nil {
 		t.Fatalf("failed to get leader for partition: %s", err)
 	}
 
-	// run migrations
-	_, err = partition.Execute(ctx, &proto.ExecuteRequest{
-		Request: &proto.Request{
-			Transaction: false,
-			Statements:  stmts,
-		},
-	})
+	err = partition.DB.RunMigrations(ctx)
 	if err != nil {
-		t.Fatalf("failed to run migrations: %s", err)
+		if !runMigrationWithRollback {
+			t.Fatalf("failed to run migrations: %s", err)
+		}
 	}
 	return partition, conf, clientMgr, tStore, ts
 }
 
 func TestRqLiteStorage(t *testing.T) {
-	partition, conf, clientMgr, tStore, ts := prepareTestSetup(t)
+	partition, conf, clientMgr, tStore, ts := prepareTestSetup(t, false)
 	defer partition.Stop()
 
 	db, err := NewDB(partition.DB.Store, partition.PartitionId, hclog.Default().Named("test-rq-lite-db"), conf, clientMgr, tStore.ClusterState)
@@ -146,8 +144,69 @@ func TestRqLiteStorage(t *testing.T) {
 	testMessageCorrelation(t, db, ts)
 }
 
+func TestRunUpMigrations(t *testing.T) {
+	partition, conf, clientMgr, tStore, _ := prepareTestSetup(t, false)
+	defer partition.Stop()
+
+	db, err := NewDB(partition.DB.Store, partition.PartitionId, hclog.Default().Named("test-migration-lite-db"), conf, clientMgr, tStore.ClusterState)
+	assert.NoError(t, err)
+
+	appliedMigrations, err := db.Queries.GetMigrations(t.Context())
+	assert.NoError(t, err)
+
+	migrations, err := sql.GetUpMigrations(db.migrationDir)
+	assert.NoError(t, err)
+
+	assert.Equal(t, len(migrations), len(appliedMigrations),
+		"Expected number of applied migrations to match number of available migrations")
+
+	appliedMigrationNames := make(map[string]struct{}, len(appliedMigrations))
+	for _, appliedMigration := range appliedMigrations {
+		appliedMigrationNames[appliedMigration.Name] = struct{}{}
+	}
+
+	for _, migration := range migrations {
+		_, found := appliedMigrationNames[migration.Filename]
+		assert.True(t, found, "migration %s was not applied", migration.Filename)
+	}
+}
+
+func TestRunRollbackMigration(t *testing.T) {
+	partition, conf, clientMgr, tStore, _ := prepareTestSetupWithTestMigration(t)
+	defer partition.Stop()
+
+	db, err := NewDB(partition.DB.Store, partition.PartitionId, hclog.Default().Named("test-migration-lite-db"), conf, clientMgr, tStore.ClusterState)
+	assert.NoError(t, err)
+
+	appliedMigrations, err := db.Queries.GetMigrations(t.Context())
+	assert.NoError(t, err)
+
+	migrations, err := sql.GetUpMigrations(db.migrationDir)
+	assert.NoError(t, err)
+	assert.Equal(t, 3, len(migrations), "Expected number of migrations to be 3, but got %d migrations", len(migrations))
+
+	assert.Equal(t, 1, len(appliedMigrations),
+		"Expected number of applied migrations to be 1, but got %d migrations", len(appliedMigrations))
+
+	appliedMigrationNames := make(map[string]struct{}, len(appliedMigrations))
+	for _, appliedMigration := range appliedMigrations {
+		appliedMigrationNames[appliedMigration.Name] = struct{}{}
+	}
+
+	assert.Contains(t, appliedMigrationNames, "0000_init.up.sql", "init migration should be applied")
+
+	var tableCount int
+	err = db.QueryRowContext(
+		t.Context(),
+		"SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ? or name = ?",
+		"rollback_probe", "should_not_exists",
+	).Scan(&tableCount)
+	assert.NoError(t, err)
+	assert.Zero(t, tableCount, "Only the migration table should exist after a failed migration rollback.")
+}
+
 func TestDataCleanup(t *testing.T) {
-	partition, conf, clientMgr, tStore, _ := prepareTestSetup(t)
+	partition, conf, clientMgr, tStore, _ := prepareTestSetup(t, false)
 	defer partition.Stop()
 
 	db, err := NewDB(partition.DB.Store, partition.PartitionId, hclog.Default().Named("test-data-cleanup"), conf, clientMgr, tStore.ClusterState)
@@ -641,6 +700,88 @@ func testInstanceParent(t *testing.T, db *DB) {
 	assert.NoError(t, err)
 	assert.NotEmpty(t, subProcesses)
 	assert.Equal(t, tok1.Key, subProcesses[0].ParentProcessExecutionToken.Int64)
+}
+
+func TestGetLatestDecisionDefinitionById(t *testing.T) {
+	partition, conf, clientMgr, tStore, _ := prepareTestSetup(t, false)
+	defer partition.Stop()
+
+	db, err := NewDB(partition.DB.Store, partition.PartitionId, hclog.Default().Named("test-decision-def"), conf, clientMgr, tStore.ClusterState)
+	assert.NoError(t, err)
+
+	// Helper to create and save a DMN resource definition
+	saveDmnResource := func(t *testing.T, key int64) dmnruntime.DmnResourceDefinition {
+		def := dmnruntime.DmnResourceDefinition{
+			Id:                fmt.Sprintf("dmn-resource-%d", key),
+			Version:           1,
+			Key:               key,
+			DmnData:           []byte(fmt.Sprintf("dmn-data-%d", key)),
+			DmnChecksum:       [16]byte{1},
+			DmnDefinitionName: fmt.Sprintf("resource-%d", key),
+		}
+		err := db.SaveDmnResourceDefinition(t.Context(), def)
+		assert.NoError(t, err)
+		return def
+	}
+
+	// Helper to create and save a decision definition
+	saveDecision := func(t *testing.T, key int64, version int64, decisionId string, versionTag string, dmnResourceDef dmnruntime.DmnResourceDefinition) dmnruntime.DecisionDefinition {
+		dec := dmnruntime.DecisionDefinition{
+			Key:                      key,
+			Version:                  version,
+			Id:                       decisionId,
+			VersionTag:               versionTag,
+			DmnResourceDefinitionId:  dmnResourceDef.Id,
+			DmnResourceDefinitionKey: dmnResourceDef.Key,
+		}
+		err := db.SaveDecisionDefinition(t.Context(), dec)
+		assert.NoError(t, err)
+		return dec
+	}
+
+	t.Run("returns decision definition when found", func(t *testing.T) {
+		resourceKey := db.GenerateId()
+		dmnResource := saveDmnResource(t, resourceKey)
+
+		decKey := db.GenerateId()
+		decisionId := fmt.Sprintf("decision-%d", decKey)
+		saved := saveDecision(t, decKey, 1, decisionId, "v1", dmnResource)
+
+		result, err := db.GetLatestDecisionDefinitionById(t.Context(), decisionId)
+		assert.NoError(t, err)
+		assert.Equal(t, saved.Key, result.Key)
+		assert.Equal(t, saved.Version, result.Version)
+		assert.Equal(t, saved.Id, result.Id)
+		assert.Equal(t, saved.VersionTag, result.VersionTag)
+		assert.Equal(t, saved.DmnResourceDefinitionId, result.DmnResourceDefinitionId)
+		assert.Equal(t, saved.DmnResourceDefinitionKey, result.DmnResourceDefinitionKey)
+	})
+
+	t.Run("returns latest version when multiple versions exist", func(t *testing.T) {
+		resourceKey := db.GenerateId()
+		dmnResource := saveDmnResource(t, resourceKey)
+
+		decisionId := fmt.Sprintf("decision-multi-%d", resourceKey)
+
+		decKey1 := db.GenerateId()
+		saveDecision(t, decKey1, 1, decisionId, "v1", dmnResource)
+
+		decKey2 := db.GenerateId()
+		latestSaved := saveDecision(t, decKey2, 2, decisionId, "v2", dmnResource)
+
+		result, err := db.GetLatestDecisionDefinitionById(t.Context(), decisionId)
+		assert.NoError(t, err)
+		assert.Equal(t, latestSaved.Key, result.Key)
+		assert.Equal(t, int64(2), result.Version)
+		assert.Equal(t, decisionId, result.Id)
+		assert.Equal(t, "v2", result.VersionTag)
+	})
+
+	t.Run("returns ErrNotFound when decision id does not exist", func(t *testing.T) {
+		_, err := db.GetLatestDecisionDefinitionById(t.Context(), "non-existent-decision-id")
+		assert.Error(t, err)
+		assert.ErrorIs(t, err, storage.ErrNotFound)
+	})
 }
 
 type testStore struct {

@@ -8,6 +8,11 @@ import (
 )
 
 func (definitions *TDefinitions) ResolveReferences() error {
+	byType := make(map[string][]string)
+	collectUnknownElements(&definitions.Process.TFlowElementsContainer, byType)
+	for name, ids := range byType {
+		return fmt.Errorf("unsupported element type '%s' (ids: %v): use supported elements only", name, ids)
+	}
 	// Map to store FlowNodes by their IDs
 	baseElementMap := make(map[string]BaseElement)
 	resolvables := make([]resolvableFunc, 0)
@@ -24,6 +29,17 @@ func (definitions *TDefinitions) ResolveReferences() error {
 		}
 	}
 	return nil
+}
+
+func collectUnknownElements(container *TFlowElementsContainer, byType map[string][]string) {
+	for _, e := range container.UnknownElements {
+		if len(e.Incoming) > 0 || len(e.Outgoing) > 0 {
+			byType[e.XMLName.Local] = append(byType[e.XMLName.Local], e.Id)
+		}
+	}
+	for i := range container.SubProcess {
+		collectUnknownElements(&container.SubProcess[i].TFlowElementsContainer, byType)
+	}
 }
 
 func (definitions *TDefinitions) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
@@ -162,36 +178,25 @@ func makeResolvable(fieldVal reflect.Value, idField reflect.Value) func(refs *ma
 				return nil
 			})
 		default:
-			panic(fmt.Sprintf("Error in structure [%s]: field is not of a slice or interface type", fieldVal.Type().Name()))
+			return fmt.Errorf("error in structure [%s]: field is not of a slice or interface type", fieldVal.Type().Name())
 		}
 		return nil
 	}
 }
 
-// FindFirstSequenceFlow returns the first flow definition for any given source and target element ID
-func FindFirstSequenceFlow(source FlowNode, target FlowNode) (result SequenceFlow) {
-	for _, flow := range source.GetOutgoingAssociation() {
-		if flow.GetTargetRef().GetId() == target.GetId() {
-			result = flow
-			break
-		}
-	}
-	return result
-}
-
-func FindFlowNodesById(definitions *TDefinitions, id string) (element FlowNode) {
-	if baseElement, ok := definitions.baseElements[id]; ok {
-		if flowNode, ok := baseElement.(FlowNode); ok {
-			element = flowNode
-		}
-	}
-	return element
-}
-
-func FindBoundaryEventsForActivity(definitions *TDefinitions, activity FlowNode) (result []TBoundaryEvent) {
-	for _, boundaryEvent := range definitions.Process.BoundaryEvent {
-		if boundaryEvent.AttachedToRef == activity.GetId() {
+func FindBoundaryEventsForActivity(processContainer *TFlowElementsContainer, activityId string) (result []TBoundaryEvent) {
+	for _, boundaryEvent := range processContainer.BoundaryEvent {
+		if boundaryEvent.AttachedToRef == activityId {
 			result = append(result, boundaryEvent)
+		}
+	}
+	if len(result) != 0 {
+		return result
+	}
+	for _, subProcess := range processContainer.SubProcess {
+		if res := FindBoundaryEventsForActivity(&subProcess.TFlowElementsContainer, activityId); res != nil {
+			result = append(result, res...)
+			return result
 		}
 	}
 	return result

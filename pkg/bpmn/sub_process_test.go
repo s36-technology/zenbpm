@@ -13,9 +13,9 @@ import (
 
 func TestCallActivityStartsAndCompletes(t *testing.T) {
 	// setup
-	_, err := bpmnEngine.LoadFromFile("./test-cases/simple_task.bpmn")
+	_, err := bpmnEngine.LoadFromFile(t.Context(), "./test-cases/simple_task.bpmn")
 	assert.NoError(t, err)
-	process, err := bpmnEngine.LoadFromFile("./test-cases/call-activity-simple.bpmn")
+	process, err := bpmnEngine.LoadFromFile(t.Context(), "./test-cases/call-activity-simple.bpmn")
 	assert.NoError(t, err)
 
 	variableName := "variable_name"
@@ -49,7 +49,7 @@ func TestCallActivityStartsAndCompletes(t *testing.T) {
 	}, 500*time.Millisecond, 100*time.Millisecond)
 	time.Sleep(1 * time.Second)
 
-	instance, err = bpmnEngine.FindProcessInstance(instance.ProcessInstance().Key)
+	instance, err = bpmnEngine.FindProcessInstance(t.Context(), instance.ProcessInstance().Key)
 	assert.NoError(t, err)
 	// then
 	assert.NotNil(t, instance, "Process instance needs to be present")
@@ -63,9 +63,9 @@ func TestCallActivityStartsAndCompletes(t *testing.T) {
 
 func TestCallActivityStartsAndCompletesAfterFinishingTheJob(t *testing.T) {
 	// setup
-	_, err := bpmnEngine.LoadFromFile("./test-cases/simple_task.bpmn")
+	_, err := bpmnEngine.LoadFromFile(t.Context(), "./test-cases/simple_task.bpmn")
 	assert.NoError(t, err)
-	process, err := bpmnEngine.LoadFromFile("./test-cases/call-activity-simple.bpmn")
+	process, err := bpmnEngine.LoadFromFile(t.Context(), "./test-cases/call-activity-simple.bpmn")
 	assert.NoError(t, err)
 
 	variableName := "variable_name"
@@ -98,7 +98,7 @@ func TestCallActivityStartsAndCompletesAfterFinishingTheJob(t *testing.T) {
 	job = jobs[0]
 
 	assert.NoError(t, err)
-	bpmnEngine.JobCompleteByKey(t.Context(), job.Key, map[string]interface{}{
+	err = bpmnEngine.JobCompleteByKey(t.Context(), job.Key, map[string]interface{}{
 		variableName: "newVal",
 	})
 	assert.NoError(t, err)
@@ -111,7 +111,7 @@ func TestCallActivityStartsAndCompletesAfterFinishingTheJob(t *testing.T) {
 	}, 500*time.Millisecond, 100*time.Millisecond)
 	time.Sleep(1 * time.Second)
 
-	v, err := bpmnEngine.FindProcessInstance(foundInstance.ProcessInstance().Key)
+	v, err := bpmnEngine.FindProcessInstance(t.Context(), foundInstance.ProcessInstance().Key)
 	assert.NoError(t, err)
 	assert.NotNil(t, v, "Process instance needs to be present")
 	assert.Equal(t, runtime.ActivityStateCompleted.String(), v.ProcessInstance().State.String())
@@ -124,9 +124,9 @@ func TestCallActivityStartsAndCompletesAfterFinishingTheJob(t *testing.T) {
 
 func TestCallActivityCancelsOnInterruptingBoundaryEvent(t *testing.T) {
 	// setup
-	_, err := bpmnEngine.LoadFromFile("./test-cases/simple_task.bpmn")
+	_, err := bpmnEngine.LoadFromFile(t.Context(), "./test-cases/simple_task.bpmn")
 	assert.NoError(t, err)
-	process, err := bpmnEngine.LoadFromFile("./test-cases/call-activity-with-boundary-simple.bpmn")
+	process, err := bpmnEngine.LoadFromFile(t.Context(), "./test-cases/call-activity-with-boundary-simple.bpmn")
 	assert.NoError(t, err)
 
 	variableName := "variable_name"
@@ -179,9 +179,79 @@ func TestCallActivityCancelsOnInterruptingBoundaryEvent(t *testing.T) {
 	assert.Equal(t, 0, len(jobs))
 }
 
+func TestCallActivityCorrelateBoundaryEvent(t *testing.T) {
+	// setup
+	_, err := bpmnEngine.LoadFromFile(t.Context(), "./test-cases/message-boundary-event-interrupting.bpmn")
+	assert.NoError(t, err)
+	process, err := bpmnEngine.LoadFromFile(t.Context(), "./test-cases/call-activity-with-boundary-with-inner-boundary-event.bpmn")
+	assert.NoError(t, err)
+
+	variableName := "variable_name"
+	variableContext := make(map[string]interface{}, 2)
+	variableContext[variableName] = "oldVal"
+
+	randomCorellationKey := rand.Int63()
+
+	variableContext["correlationKey"] = fmt.Sprint(randomCorellationKey)
+
+	// when
+	instance, err := bpmnEngine.CreateInstanceByKey(t.Context(), process.Key, variableContext)
+	assert.NoError(t, err)
+
+	// wait for subprocess to be created
+	time.Sleep(1 * time.Second)
+
+	parentInstanceKey := instance.ProcessInstance().Key
+	var foundChildInstance runtime.CallActivityInstance
+	for _, pi := range engineStorage.ProcessInstances {
+		if pi.Type() != runtime.ProcessTypeCallActivity {
+			continue
+		}
+		if pi.(*runtime.CallActivityInstance).ParentProcessExecutionToken.ProcessInstanceKey == parentInstanceKey {
+			foundChildInstance = *pi.(*runtime.CallActivityInstance)
+			break
+		}
+	}
+
+	time.Sleep(1 * time.Second)
+
+	// when
+	variables := map[string]interface{}{"payload": "message payload"}
+	err = bpmnEngine.PublishMessageByName(t.Context(), "simple-boundary", "message-boundary-event-interruptingCorrelationKey", variables)
+	assert.NoError(t, err)
+
+	// then
+	assert.Eventually(t, func() bool {
+		if processInstance, ok := engineStorage.ProcessInstances[instance.ProcessInstance().Key]; ok && processInstance.ProcessInstance().State == runtime.ActivityStateCompleted {
+			return true
+		}
+		return false
+	}, 500*time.Millisecond, 100*time.Millisecond)
+	time.Sleep(1 * time.Second)
+
+	subscriptions, err := bpmnEngine.persistence.FindProcessInstanceMessageSubscriptions(t.Context(), foundChildInstance.ProcessInstance().Key, runtime.ActivityStateActive)
+	assert.NoError(t, err)
+	assert.Equal(t, 0, len(subscriptions))
+	subscriptions, err = bpmnEngine.persistence.FindProcessInstanceMessageSubscriptions(t.Context(), instance.ProcessInstance().Key, runtime.ActivityStateActive)
+	assert.NoError(t, err)
+	assert.Equal(t, 0, len(subscriptions))
+
+	instance, err = bpmnEngine.persistence.FindProcessInstanceByKey(t.Context(), instance.ProcessInstance().Key)
+	assert.NoError(t, err)
+	assert.Equal(t, runtime.ActivityStateCompleted, instance.ProcessInstance().GetState(), "Parent instance should be completed")
+
+	instance, err = bpmnEngine.persistence.FindProcessInstanceByKey(t.Context(), foundChildInstance.ProcessInstance().Key)
+	assert.NoError(t, err)
+	assert.Equal(t, runtime.ActivityStateCompleted, instance.ProcessInstance().GetState(), "Child instance should be completed")
+
+	jobs := findActiveJobsForProcessInstance(instance.ProcessInstance().Key, "TestType")
+	assert.NoError(t, err)
+	assert.Equal(t, 0, len(jobs))
+}
+
 func TestSubProcessStartsAndCompletes(t *testing.T) {
 	// setup
-	process, err := bpmnEngine.LoadFromFile("./test-cases/simple_sub_process_task.bpmn")
+	process, err := bpmnEngine.LoadFromFile(t.Context(), "./test-cases/simple_sub_process_task.bpmn")
 	assert.NoError(t, err)
 
 	variableName := "variable_name"
@@ -215,7 +285,7 @@ func TestSubProcessStartsAndCompletes(t *testing.T) {
 	}, 500*time.Millisecond, 100*time.Millisecond)
 	time.Sleep(1 * time.Second)
 
-	instance, err = bpmnEngine.FindProcessInstance(instance.ProcessInstance().Key)
+	instance, err = bpmnEngine.FindProcessInstance(t.Context(), instance.ProcessInstance().Key)
 	assert.NoError(t, err)
 	// then
 	assert.NotNil(t, instance, "Process instance needs to be present")
@@ -227,9 +297,262 @@ func TestSubProcessStartsAndCompletes(t *testing.T) {
 	assert.Equal(t, 0, len(subscriptions))
 }
 
+func TestSubProcessStartsAndCompletesAfterFinishingTheJob(t *testing.T) {
+	// setup
+	process, err := bpmnEngine.LoadFromFile(t.Context(), "./test-cases/simple_sub_process_task.bpmn")
+	assert.NoError(t, err)
+
+	variableName := "variable_name"
+	variableContext := make(map[string]interface{}, 1)
+	variableContext[variableName] = "oldVal"
+
+	// when
+	instance, err := bpmnEngine.CreateInstanceByKey(t.Context(), process.Key, variableContext)
+	assert.NoError(t, err)
+
+	// wait for call activity process to be created
+	time.Sleep(1 * time.Second)
+
+	parentInstanceKey := instance.ProcessInstance().Key
+	var foundInstance runtime.SubProcessInstance
+	for _, pi := range engineStorage.ProcessInstances {
+		if pi.Type() != runtime.ProcessTypeSubProcess {
+			continue
+		}
+		if pi.(*runtime.SubProcessInstance).ParentProcessExecutionToken.ProcessInstanceKey == parentInstanceKey {
+			foundInstance = *pi.(*runtime.SubProcessInstance)
+			break
+		}
+	}
+
+	var job runtime.Job
+	jobs, err := bpmnEngine.persistence.FindPendingProcessInstanceJobs(t.Context(), foundInstance.ProcessInstance().Key)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(jobs), "There should be one job")
+	job = jobs[0]
+
+	assert.NoError(t, err)
+	assert.Equal(t, variableContext[variableName], engineStorage.Jobs[job.Key].Variables["testInput"])
+	bpmnEngine.JobCompleteByKey(t.Context(), job.Key, map[string]interface{}{
+		"testJobOutput": "newJobVal",
+	})
+	assert.NoError(t, err)
+
+	assert.Eventually(t, func() bool {
+		if processInstance, ok := engineStorage.ProcessInstances[instance.ProcessInstance().Key]; ok && processInstance.ProcessInstance().State == runtime.ActivityStateCompleted {
+			return true
+		}
+		return false
+	}, 500*time.Millisecond, 100*time.Millisecond)
+	time.Sleep(1 * time.Second)
+
+	v, err := bpmnEngine.FindProcessInstance(t.Context(), foundInstance.ProcessInstance().Key)
+	assert.NoError(t, err)
+	assert.NotNil(t, v, "Process instance needs to be present")
+	assert.Equal(t, runtime.ActivityStateCompleted.String(), v.ProcessInstance().State.String())
+	assert.Equal(t, "oldVal", v.ProcessInstance().VariableHolder.GetLocalVariable("testInput"))
+	assert.Equal(t, "newJobVal", v.ProcessInstance().VariableHolder.GetLocalVariable("testTaskOutput"))
+
+	v, err = bpmnEngine.FindProcessInstance(t.Context(), instance.ProcessInstance().Key)
+	assert.NoError(t, err)
+	assert.NotNil(t, v, "Process instance needs to be present")
+	assert.Equal(t, runtime.ActivityStateCompleted.String(), v.ProcessInstance().State.String())
+	assert.Equal(t, "newJobVal", v.ProcessInstance().VariableHolder.GetLocalVariable("testOutput"))
+
+	subscriptions, err := bpmnEngine.persistence.FindProcessInstanceMessageSubscriptions(t.Context(), instance.ProcessInstance().Key, runtime.ActivityStateActive)
+	assert.NoError(t, err)
+	assert.Equal(t, 0, len(subscriptions))
+}
+
+func TestSubProcessCancelsOnInterruptingBoundaryEvent(t *testing.T) {
+	// setup
+	process, err := bpmnEngine.LoadFromFile(t.Context(), "./test-cases/simple_sub_process_task.bpmn")
+	assert.NoError(t, err)
+
+	variableName := "variable_name"
+	variableContext := make(map[string]interface{}, 1)
+	variableContext[variableName] = "oldVal"
+
+	// when
+	instance, err := bpmnEngine.CreateInstanceByKey(t.Context(), process.Key, variableContext)
+	assert.NoError(t, err)
+
+	// wait for subprocess to be created
+	time.Sleep(1 * time.Second)
+
+	parentInstanceKey := instance.ProcessInstance().Key
+	var foundChildInstance runtime.SubProcessInstance
+	for _, pi := range engineStorage.ProcessInstances {
+		if pi.Type() != runtime.ProcessTypeSubProcess {
+			continue
+		}
+		if pi.(*runtime.SubProcessInstance).ParentProcessExecutionToken.ProcessInstanceKey == parentInstanceKey {
+			foundChildInstance = *pi.(*runtime.SubProcessInstance)
+			break
+		}
+	}
+
+	// when
+	variables := map[string]interface{}{"payload": "message payload"}
+	err = bpmnEngine.PublishMessageByName(t.Context(), "OuterTestMessage", "testMessage", variables)
+	assert.NoError(t, err)
+
+	// then
+	subscriptions, err := bpmnEngine.persistence.FindProcessInstanceMessageSubscriptions(t.Context(), instance.ProcessInstance().Key, runtime.ActivityStateActive)
+	assert.NoError(t, err)
+	assert.Equal(t, 0, len(subscriptions))
+
+	instance, err = bpmnEngine.persistence.FindProcessInstanceByKey(t.Context(), instance.ProcessInstance().Key)
+	assert.NoError(t, err)
+	assert.Equal(t, runtime.ActivityStateCompleted, instance.ProcessInstance().GetState(), "Parent instance should be completed")
+
+	instance, err = bpmnEngine.persistence.FindProcessInstanceByKey(t.Context(), foundChildInstance.ProcessInstance().Key)
+	assert.NoError(t, err)
+	assert.Equal(t, runtime.ActivityStateTerminated, instance.ProcessInstance().GetState(), "Child instance should be terminated")
+
+	jobs := findActiveJobsForProcessInstance(instance.ProcessInstance().Key, "TestType")
+	assert.NoError(t, err)
+	assert.Equal(t, 0, len(jobs))
+}
+
+func TestSubProcessCorrelateBoundaryEvent(t *testing.T) {
+	// setup
+	process, err := bpmnEngine.LoadFromFile(t.Context(), "./test-cases/simple_sub_process_task.bpmn")
+	assert.NoError(t, err)
+
+	variableName := "variable_name"
+	variableContext := make(map[string]interface{}, 1)
+	variableContext[variableName] = "oldVal"
+
+	// when
+	instance, err := bpmnEngine.CreateInstanceByKey(t.Context(), process.Key, variableContext)
+	assert.NoError(t, err)
+
+	// wait for subprocess to be created
+	time.Sleep(1 * time.Second)
+
+	parentInstanceKey := instance.ProcessInstance().Key
+	var foundChildInstance runtime.SubProcessInstance
+	for _, pi := range engineStorage.ProcessInstances {
+		if pi.Type() != runtime.ProcessTypeSubProcess {
+			continue
+		}
+		if pi.(*runtime.SubProcessInstance).ParentProcessExecutionToken.ProcessInstanceKey == parentInstanceKey {
+			foundChildInstance = *pi.(*runtime.SubProcessInstance)
+			break
+		}
+	}
+
+	time.Sleep(1 * time.Second)
+
+	// when
+	variables := map[string]interface{}{"payload": "message payload"}
+	err = bpmnEngine.PublishMessageByName(t.Context(), "InnerTestMessage", "testMessage", variables)
+	assert.NoError(t, err)
+
+	// then
+	assert.Eventually(t, func() bool {
+		if processInstance, ok := engineStorage.ProcessInstances[instance.ProcessInstance().Key]; ok && processInstance.ProcessInstance().State == runtime.ActivityStateCompleted {
+			return true
+		}
+		return false
+	}, 500*time.Millisecond, 100*time.Millisecond)
+	time.Sleep(1 * time.Second)
+
+	subscriptions, err := bpmnEngine.persistence.FindProcessInstanceMessageSubscriptions(t.Context(), foundChildInstance.ProcessInstance().Key, runtime.ActivityStateActive)
+	assert.NoError(t, err)
+	assert.Equal(t, 0, len(subscriptions))
+	subscriptions, err = bpmnEngine.persistence.FindProcessInstanceMessageSubscriptions(t.Context(), instance.ProcessInstance().Key, runtime.ActivityStateActive)
+	assert.NoError(t, err)
+	assert.Equal(t, 0, len(subscriptions))
+
+	instance, err = bpmnEngine.persistence.FindProcessInstanceByKey(t.Context(), instance.ProcessInstance().Key)
+	assert.NoError(t, err)
+	assert.Equal(t, runtime.ActivityStateCompleted, instance.ProcessInstance().GetState(), "Parent instance should be completed")
+
+	instance, err = bpmnEngine.persistence.FindProcessInstanceByKey(t.Context(), foundChildInstance.ProcessInstance().Key)
+	assert.NoError(t, err)
+	assert.Equal(t, runtime.ActivityStateCompleted, instance.ProcessInstance().GetState(), "Child instance should be completed")
+
+	jobs := findActiveJobsForProcessInstance(instance.ProcessInstance().Key, "TestType")
+	assert.NoError(t, err)
+	assert.Equal(t, 0, len(jobs))
+}
+
+func TestMultiInstanceSubprocessCancelsOnInterruptingBoundaryEvent(t *testing.T) {
+	// setup
+	process, err := bpmnEngine.LoadFromFile(t.Context(), "./test-cases/multi_instance_sub_process_task.bpmn")
+	assert.NoError(t, err)
+
+	// when
+	variableContext := make(map[string]interface{}, 1)
+	variableContext["testInputCollection"] = []string{"test1", "test2"}
+	instance, err := bpmnEngine.CreateInstanceByKey(t.Context(), process.Key, variableContext)
+	assert.NoError(t, err)
+
+	// wait for subprocess to be created
+	time.Sleep(1 * time.Second)
+
+	parentInstanceKey := instance.ProcessInstance().Key
+	var multiInstance runtime.MultiInstanceInstance
+	for _, pi := range engineStorage.ProcessInstances {
+		if pi.Type() != runtime.ProcessTypeMultiInstance {
+			continue
+		}
+		if pi.(*runtime.MultiInstanceInstance).ParentProcessExecutionToken.ProcessInstanceKey == parentInstanceKey {
+			multiInstance = *pi.(*runtime.MultiInstanceInstance)
+			break
+		}
+	}
+
+	time.Sleep(1 * time.Second)
+
+	var foundChildInstance runtime.SubProcessInstance
+	for _, pi := range engineStorage.ProcessInstances {
+		if pi.Type() != runtime.ProcessTypeSubProcess {
+			continue
+		}
+		if pi.(*runtime.SubProcessInstance).ParentProcessExecutionToken.ProcessInstanceKey == multiInstance.Key {
+			foundChildInstance = *pi.(*runtime.SubProcessInstance)
+			break
+		}
+	}
+
+	// when
+	variables := map[string]interface{}{"payload": "message payload"}
+	err = bpmnEngine.PublishMessageByName(t.Context(), "boundary message", "1234", variables)
+	assert.NoError(t, err)
+
+	time.Sleep(1 * time.Second)
+
+	// then
+	subscriptions, err := bpmnEngine.persistence.FindProcessInstanceMessageSubscriptions(t.Context(), instance.ProcessInstance().Key, runtime.ActivityStateActive)
+	assert.NoError(t, err)
+	assert.Equal(t, 0, len(subscriptions))
+	subscriptions, err = bpmnEngine.persistence.FindProcessInstanceMessageSubscriptions(t.Context(), foundChildInstance.ProcessInstance().Key, runtime.ActivityStateActive)
+	assert.NoError(t, err)
+	assert.Equal(t, 0, len(subscriptions))
+
+	instance, err = bpmnEngine.persistence.FindProcessInstanceByKey(t.Context(), instance.ProcessInstance().Key)
+	assert.NoError(t, err)
+	assert.Equal(t, runtime.ActivityStateCompleted, instance.ProcessInstance().GetState(), "Parent instance should be completed")
+
+	instance, err = bpmnEngine.persistence.FindProcessInstanceByKey(t.Context(), foundChildInstance.ProcessInstance().Key)
+	assert.NoError(t, err)
+	assert.Equal(t, runtime.ActivityStateTerminated, instance.ProcessInstance().GetState(), "Child instance should be terminated")
+
+	instance, err = bpmnEngine.persistence.FindProcessInstanceByKey(t.Context(), multiInstance.ProcessInstance().Key)
+	assert.NoError(t, err)
+	assert.Equal(t, runtime.ActivityStateTerminated, instance.ProcessInstance().GetState(), "Multi Instance should be terminated")
+
+	jobs := findActiveJobsForProcessInstance(instance.ProcessInstance().Key, "TestType")
+	assert.NoError(t, err)
+	assert.Equal(t, 0, len(jobs))
+}
+
 func TestMultiInstanceServiceTaskStartsAndCompletesLocalJob(t *testing.T) {
 	// setup
-	process, err := bpmnEngine.LoadFromFile("./test-cases/multi_instance_service_task.bpmn")
+	process, err := bpmnEngine.LoadFromFile(t.Context(), "./test-cases/multi_instance_service_task.bpmn")
 	assert.NoError(t, err)
 
 	variableName := "testJobOutput"
@@ -262,7 +585,7 @@ func TestMultiInstanceServiceTaskStartsAndCompletesLocalJob(t *testing.T) {
 	}, 500*time.Millisecond, 100*time.Millisecond)
 	time.Sleep(1 * time.Second)
 
-	instance, err = bpmnEngine.FindProcessInstance(instance.ProcessInstance().Key)
+	instance, err = bpmnEngine.FindProcessInstance(t.Context(), instance.ProcessInstance().Key)
 	assert.NoError(t, err)
 	// then
 	assert.NotNil(t, instance, "Process instance needs to be present")
@@ -293,7 +616,7 @@ func TestMultiInstanceServiceTaskStartsAndCompletesOnWorkerJob(t *testing.T) {
 	engineStorage.Jobs = make(map[int64]runtime.Job)
 
 	// setup
-	process, err := bpmnEngine.LoadFromFile("./test-cases/multi_instance_service_task.bpmn")
+	process, err := bpmnEngine.LoadFromFile(t.Context(), "./test-cases/multi_instance_service_task.bpmn")
 	assert.NoError(t, err)
 
 	// when
@@ -327,7 +650,7 @@ func TestMultiInstanceServiceTaskStartsAndCompletesOnWorkerJob(t *testing.T) {
 	}, 500*time.Millisecond, 100*time.Millisecond)
 	time.Sleep(1 * time.Second)
 
-	instance, err = bpmnEngine.FindProcessInstance(instance.ProcessInstance().Key)
+	instance, err = bpmnEngine.FindProcessInstance(t.Context(), instance.ProcessInstance().Key)
 	assert.NoError(t, err)
 
 	testOutput := make([]string, 0)
@@ -353,7 +676,7 @@ func TestMultiInstanceServiceTaskStartsAndCompletesOnWorkerJob(t *testing.T) {
 
 func TestMultiInstanceParallelServiceTaskStartsAndCompletesWorkerJob(t *testing.T) {
 	// setup
-	process, err := bpmnEngine.LoadFromFile("./test-cases/multi_instance_parallel_service_task.bpmn")
+	process, err := bpmnEngine.LoadFromFile(t.Context(), "./test-cases/multi_instance_parallel_service_task.bpmn")
 	assert.NoError(t, err)
 
 	// when
@@ -387,7 +710,7 @@ func TestMultiInstanceParallelServiceTaskStartsAndCompletesWorkerJob(t *testing.
 	}, 500*time.Millisecond, 100*time.Millisecond)
 	time.Sleep(1 * time.Second)
 
-	instance, err = bpmnEngine.FindProcessInstance(instance.ProcessInstance().Key)
+	instance, err = bpmnEngine.FindProcessInstance(t.Context(), instance.ProcessInstance().Key)
 	assert.NoError(t, err)
 
 	testOutput := make([]string, 0)
@@ -413,7 +736,7 @@ func TestMultiInstanceParallelServiceTaskStartsAndCompletesWorkerJob(t *testing.
 
 func TestMultiInstanceParallelServiceTaskStartsAndCompletesLocalJob(t *testing.T) {
 	// setup
-	process, err := bpmnEngine.LoadFromFile("./test-cases/multi_instance_parallel_service_task.bpmn")
+	process, err := bpmnEngine.LoadFromFile(t.Context(), "./test-cases/multi_instance_parallel_service_task.bpmn")
 	assert.NoError(t, err)
 
 	variableName := "testJobOutput"
@@ -446,7 +769,7 @@ func TestMultiInstanceParallelServiceTaskStartsAndCompletesLocalJob(t *testing.T
 	}, 500*time.Millisecond, 100*time.Millisecond)
 	time.Sleep(1 * time.Second)
 
-	instance, err = bpmnEngine.FindProcessInstance(instance.ProcessInstance().Key)
+	instance, err = bpmnEngine.FindProcessInstance(t.Context(), instance.ProcessInstance().Key)
 	assert.NoError(t, err)
 	// then
 	assert.NotNil(t, instance, "Process instance needs to be present")
@@ -474,7 +797,7 @@ func TestMultiInstanceParallelServiceTaskStartsAndCompletesLocalJob(t *testing.T
 
 func TestMultiInstanceBusinessRuleTaskStartsAndCompletesLocalJob(t *testing.T) {
 	// setup
-	process, err := bpmnEngine.LoadFromFile("./test-cases/multi_instance_business_rule.bpmn")
+	process, err := bpmnEngine.LoadFromFile(t.Context(), "./test-cases/multi_instance_business_rule.bpmn")
 	assert.NoError(t, err)
 
 	definition, xmldata, err := bpmnEngine.dmnEngine.ParseDmnFromFile(filepath.Join("..", "dmn", "test-data", "bulk-evaluation-test", "can-autoliquidate-rule.dmn"))
@@ -502,7 +825,7 @@ func TestMultiInstanceBusinessRuleTaskStartsAndCompletesLocalJob(t *testing.T) {
 	}, 500*time.Millisecond, 100*time.Millisecond)
 	time.Sleep(1 * time.Second)
 
-	instance, err = bpmnEngine.FindProcessInstance(instance.ProcessInstance().Key)
+	instance, err = bpmnEngine.FindProcessInstance(t.Context(), instance.ProcessInstance().Key)
 	assert.NoError(t, err)
 
 	assert.ElementsMatch(t, []map[string]interface{}{{"canAutoLiquidate": true}, {"canAutoLiquidate": false}, {"canAutoLiquidate": true}}, instance.ProcessInstance().VariableHolder.GetLocalVariable("testOutputCollection"))
@@ -523,7 +846,7 @@ func TestMultiInstanceBusinessRuleTaskStartsAndCompletesLocalJob(t *testing.T) {
 
 func TestMultiInstanceParallelBusinessRuleTaskStartsAndCompletesLocalJob(t *testing.T) {
 	// setup
-	process, err := bpmnEngine.LoadFromFile("./test-cases/multi_instance_parallel_business_rule.bpmn")
+	process, err := bpmnEngine.LoadFromFile(t.Context(), "./test-cases/multi_instance_parallel_business_rule.bpmn")
 	assert.NoError(t, err)
 
 	definition, xmldata, err := bpmnEngine.dmnEngine.ParseDmnFromFile(filepath.Join("..", "dmn", "test-data", "bulk-evaluation-test", "can-autoliquidate-rule.dmn"))
@@ -551,7 +874,7 @@ func TestMultiInstanceParallelBusinessRuleTaskStartsAndCompletesLocalJob(t *test
 	}, 500*time.Millisecond, 100*time.Millisecond)
 	time.Sleep(1 * time.Second)
 
-	instance, err = bpmnEngine.FindProcessInstance(instance.ProcessInstance().Key)
+	instance, err = bpmnEngine.FindProcessInstance(t.Context(), instance.ProcessInstance().Key)
 	assert.NoError(t, err)
 
 	assert.ElementsMatch(t, []map[string]interface{}{{"canAutoLiquidate": true}, {"canAutoLiquidate": false}, {"canAutoLiquidate": true}}, instance.ProcessInstance().VariableHolder.GetLocalVariable("testOutputCollection"))
@@ -572,10 +895,10 @@ func TestMultiInstanceParallelBusinessRuleTaskStartsAndCompletesLocalJob(t *test
 
 func TestMultiInstanceCallActivityStartsAndCompletes(t *testing.T) {
 	// setup
-	process, err := bpmnEngine.LoadFromFile("./test-cases/multi_instance_call_activity_process.bpmn")
+	process, err := bpmnEngine.LoadFromFile(t.Context(), "./test-cases/multi_instance_call_activity_process.bpmn")
 	assert.NoError(t, err)
 
-	process, err = bpmnEngine.LoadFromFile("./test-cases/multi_instance_call_activity_task.bpmn")
+	process, err = bpmnEngine.LoadFromFile(t.Context(), "./test-cases/multi_instance_call_activity_task.bpmn")
 	assert.NoError(t, err)
 
 	variableName := "testJobOutput"
@@ -605,7 +928,7 @@ func TestMultiInstanceCallActivityStartsAndCompletes(t *testing.T) {
 	}, 500*time.Millisecond, 100*time.Millisecond)
 	time.Sleep(1 * time.Second)
 
-	instance, err = bpmnEngine.FindProcessInstance(instance.ProcessInstance().Key)
+	instance, err = bpmnEngine.FindProcessInstance(t.Context(), instance.ProcessInstance().Key)
 	assert.NoError(t, err)
 	// then
 	assert.NotNil(t, instance, "Process instance needs to be present")
@@ -633,10 +956,10 @@ func TestMultiInstanceCallActivityStartsAndCompletes(t *testing.T) {
 
 func TestMultiInstanceParallelCallActivityStartsAndCompletes(t *testing.T) {
 	// setup
-	process, err := bpmnEngine.LoadFromFile("./test-cases/multi_instance_call_activity_process.bpmn")
+	process, err := bpmnEngine.LoadFromFile(t.Context(), "./test-cases/multi_instance_call_activity_process.bpmn")
 	assert.NoError(t, err)
 
-	process, err = bpmnEngine.LoadFromFile("./test-cases/multi_instance_parallel_call_activity_task.bpmn")
+	process, err = bpmnEngine.LoadFromFile(t.Context(), "./test-cases/multi_instance_parallel_call_activity_task.bpmn")
 	assert.NoError(t, err)
 
 	variableName := "testJobOutput"
@@ -666,7 +989,7 @@ func TestMultiInstanceParallelCallActivityStartsAndCompletes(t *testing.T) {
 	}, 5000*time.Millisecond, 100*time.Millisecond)
 	time.Sleep(1 * time.Second)
 
-	instance, err = bpmnEngine.FindProcessInstance(instance.ProcessInstance().Key)
+	instance, err = bpmnEngine.FindProcessInstance(t.Context(), instance.ProcessInstance().Key)
 	assert.NoError(t, err)
 	// then
 	assert.NotNil(t, instance, "Process instance needs to be present")
@@ -721,7 +1044,7 @@ func TestMultiInstanceParallelCallActivityStartsAndCompletes(t *testing.T) {
 
 func TestMultiInstanceSubProcessStartsAndCompletes(t *testing.T) {
 	// setup
-	process, err := bpmnEngine.LoadFromFile("./test-cases/multi_instance_sub_process_task.bpmn")
+	process, err := bpmnEngine.LoadFromFile(t.Context(), "./test-cases/multi_instance_sub_process_task.bpmn")
 	assert.NoError(t, err)
 
 	variableName := "testJobOutput"
@@ -751,7 +1074,7 @@ func TestMultiInstanceSubProcessStartsAndCompletes(t *testing.T) {
 	}, 500*time.Millisecond, 100*time.Millisecond)
 	time.Sleep(1 * time.Second)
 
-	instance, err = bpmnEngine.FindProcessInstance(instance.ProcessInstance().Key)
+	instance, err = bpmnEngine.FindProcessInstance(t.Context(), instance.ProcessInstance().Key)
 	assert.NoError(t, err)
 	// then
 	assert.NotNil(t, instance, "Process instance needs to be present")
@@ -777,9 +1100,181 @@ func TestMultiInstanceSubProcessStartsAndCompletes(t *testing.T) {
 	assert.Equal(t, runtime.ActivityStateCompleted, subProcesses[0].ProcessInstance().State)
 }
 
+func TestMultiInstanceSubProcessStartsAndCompletesJobByKey(t *testing.T) {
+	// setup
+	process, err := bpmnEngine.LoadFromFile(t.Context(), "./test-cases/multi_instance_sub_process_task.bpmn")
+	assert.NoError(t, err)
+
+	// when
+	variableContext := make(map[string]interface{}, 1)
+	variableContext["testInputCollection"] = []string{"test1", "test2"}
+	instance, err := bpmnEngine.CreateInstanceByKey(t.Context(), process.Key, variableContext)
+	assert.NoError(t, err)
+
+	time.Sleep(1 * time.Second)
+
+	var foundMultiInstance runtime.MultiInstanceInstance
+	assert.Eventually(t, func() bool {
+		for _, pi := range engineStorage.ProcessInstances {
+			if pi.Type() == runtime.ProcessTypeMultiInstance && *pi.(*runtime.MultiInstanceInstance).GetParentProcessInstanceKey() == instance.ProcessInstance().Key {
+				foundMultiInstance = *pi.(*runtime.MultiInstanceInstance)
+				return true
+			}
+		}
+		return false
+	}, 500*time.Millisecond, 100*time.Millisecond)
+
+	var foundInstance runtime.SubProcessInstance
+	assert.Eventually(t, func() bool {
+		for _, pi := range engineStorage.ProcessInstances {
+			if pi.Type() == runtime.ProcessTypeSubProcess && *pi.(*runtime.SubProcessInstance).GetParentProcessInstanceKey() == foundMultiInstance.Key {
+				foundInstance = *pi.(*runtime.SubProcessInstance)
+				return true
+			}
+		}
+		return false
+	}, 500*time.Millisecond, 100*time.Millisecond)
+
+	var jobs []runtime.Job
+	assert.Eventually(t, func() bool {
+		jobs, _ = bpmnEngine.persistence.FindPendingProcessInstanceJobs(t.Context(), foundInstance.ProcessInstance().Key)
+		if len(jobs) == 1 {
+			return true
+		}
+		return false
+	}, 10000*time.Millisecond, 100*time.Millisecond)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(jobs), "There should be one job")
+	job := jobs[0]
+	err = bpmnEngine.JobCompleteByKey(t.Context(), job.Key, map[string]interface{}{
+		"testJobOutput": "newJobVal1",
+	})
+	assert.NoError(t, err)
+
+	time.Sleep(1 * time.Second)
+
+	assert.Eventually(t, func() bool {
+		for _, pi := range engineStorage.ProcessInstances {
+			if pi.Type() == runtime.ProcessTypeSubProcess && foundInstance.ProcessInstance().Key != pi.ProcessInstance().Key && *pi.(*runtime.SubProcessInstance).GetParentProcessInstanceKey() == foundMultiInstance.Key {
+				foundInstance = *pi.(*runtime.SubProcessInstance)
+				return true
+			}
+		}
+		return false
+	}, 2000*time.Millisecond, 100*time.Millisecond)
+	time.Sleep(1 * time.Second)
+
+	assert.Eventually(t, func() bool {
+		jobs, _ = bpmnEngine.persistence.FindPendingProcessInstanceJobs(t.Context(), foundInstance.ProcessInstance().Key)
+		if len(jobs) == 1 {
+			return true
+		}
+		return false
+	}, 10000*time.Millisecond, 100*time.Millisecond)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(jobs), "There should be one job")
+	job = jobs[0]
+	err = bpmnEngine.JobCompleteByKey(t.Context(), job.Key, map[string]interface{}{
+		"testJobOutput": "newJobVal2",
+	})
+	assert.NoError(t, err)
+
+	time.Sleep(1 * time.Second)
+
+	instance, err = bpmnEngine.FindProcessInstance(t.Context(), instance.ProcessInstance().Key)
+	assert.NoError(t, err)
+	// then
+	assert.NotNil(t, instance, "Process instance needs to be present")
+
+	testOutput := make([]string, 0)
+	for _, str := range instance.ProcessInstance().VariableHolder.GetLocalVariable("testOutputCollection").([]interface{}) {
+		testOutput = append(testOutput, str.(string))
+	}
+
+	assert.ElementsMatch(t, []string{"newJobVal1", "newJobVal2"}, testOutput)
+	assert.Equal(t, runtime.ActivityStateCompleted, instance.ProcessInstance().State)
+
+	subscriptions, err := bpmnEngine.persistence.FindProcessInstanceMessageSubscriptions(t.Context(), instance.ProcessInstance().Key, runtime.ActivityStateActive)
+	assert.NoError(t, err)
+	assert.Equal(t, 0, len(subscriptions))
+
+	tokens, err := bpmnEngine.persistence.GetCompletedTokensForProcessInstance(t.Context(), instance.ProcessInstance().Key)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(tokens))
+	subProcesses, err := bpmnEngine.persistence.FindProcessInstancesByParentExecutionTokenKey(t.Context(), tokens[0].Key)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(subProcesses))
+	assert.Equal(t, runtime.ActivityStateCompleted, subProcesses[0].ProcessInstance().State)
+}
+
+func TestMultiInstanceSubProcessCorrelateBoundaryEvent(t *testing.T) {
+	// setup
+	process, err := bpmnEngine.LoadFromFile(t.Context(), "./test-cases/multi_instance_sub_process_task.bpmn")
+	assert.NoError(t, err)
+
+	// when
+	variableContext := make(map[string]interface{}, 1)
+	variableContext["testInputCollection"] = []string{"test1", "test2"}
+	instance, err := bpmnEngine.CreateInstanceByKey(t.Context(), process.Key, variableContext)
+	assert.NoError(t, err)
+
+	// wait for subprocess to be created
+	time.Sleep(1 * time.Second)
+
+	// when
+	variables := map[string]interface{}{"payload": "message payload"}
+	err = bpmnEngine.PublishMessageByName(t.Context(), "Event_1r7iviyMessage", "1234", variables)
+	assert.NoError(t, err)
+
+	// then
+	var foundChildInstance runtime.ProcessInstance
+	assert.Eventually(t, func() bool {
+		for _, pi := range engineStorage.ProcessInstances {
+			if pi.Type() == runtime.ProcessTypeSubProcess && pi.ProcessInstance().State == runtime.ActivityStateCompleted {
+				foundChildInstance = pi
+				return true
+			}
+		}
+		return false
+	}, 500*time.Millisecond, 100*time.Millisecond)
+	time.Sleep(1 * time.Second)
+
+	err = bpmnEngine.PublishMessageByName(t.Context(), "Event_1r7iviyMessage", "1234", variables)
+	assert.NoError(t, err)
+
+	assert.Eventually(t, func() bool {
+		for _, pi := range engineStorage.ProcessInstances {
+			if pi.Type() == runtime.ProcessTypeDefault && pi.ProcessInstance().State == runtime.ActivityStateCompleted {
+				return true
+			}
+		}
+		return false
+	}, 500*time.Millisecond, 100*time.Millisecond)
+	time.Sleep(1 * time.Second)
+
+	subscriptions, err := bpmnEngine.persistence.FindProcessInstanceMessageSubscriptions(t.Context(), foundChildInstance.ProcessInstance().Key, runtime.ActivityStateActive)
+	assert.NoError(t, err)
+	assert.Equal(t, 0, len(subscriptions))
+	subscriptions, err = bpmnEngine.persistence.FindProcessInstanceMessageSubscriptions(t.Context(), instance.ProcessInstance().Key, runtime.ActivityStateActive)
+	assert.NoError(t, err)
+	assert.Equal(t, 0, len(subscriptions))
+
+	instance, err = bpmnEngine.persistence.FindProcessInstanceByKey(t.Context(), instance.ProcessInstance().Key)
+	assert.NoError(t, err)
+	assert.Equal(t, runtime.ActivityStateCompleted, instance.ProcessInstance().GetState(), "Parent instance should be completed")
+
+	instance, err = bpmnEngine.persistence.FindProcessInstanceByKey(t.Context(), foundChildInstance.ProcessInstance().Key)
+	assert.NoError(t, err)
+	assert.Equal(t, runtime.ActivityStateCompleted, instance.ProcessInstance().GetState(), "Child instance should be completed")
+
+	jobs := findActiveJobsForProcessInstance(instance.ProcessInstance().Key, "TestType")
+	assert.NoError(t, err)
+	assert.Equal(t, 0, len(jobs))
+}
+
 func TestMultiInstanceParallelSubProcessStartsAndCompletes(t *testing.T) {
 	// setup
-	process, err := bpmnEngine.LoadFromFile("./test-cases/multi_instance_parallel_sub_process_task.bpmn")
+	process, err := bpmnEngine.LoadFromFile(t.Context(), "./test-cases/multi_instance_parallel_sub_process_task.bpmn")
 	assert.NoError(t, err)
 
 	variableName := "testJobOutput"
@@ -809,7 +1304,7 @@ func TestMultiInstanceParallelSubProcessStartsAndCompletes(t *testing.T) {
 	}, 5000*time.Millisecond, 100*time.Millisecond)
 	time.Sleep(1 * time.Second)
 
-	instance, err = bpmnEngine.FindProcessInstance(instance.ProcessInstance().Key)
+	instance, err = bpmnEngine.FindProcessInstance(t.Context(), instance.ProcessInstance().Key)
 	assert.NoError(t, err)
 	// then
 	assert.NotNil(t, instance, "Process instance needs to be present")
@@ -862,9 +1357,78 @@ func TestMultiInstanceParallelSubProcessStartsAndCompletes(t *testing.T) {
 	assert.Equal(t, runtime.ActivityStateCompleted, subProcesses[0].ProcessInstance().State)
 }
 
+func TestMultiInstanceParallelSubProcessCorrelateBoundaryEventFailsToCreateParallelInstancesWithSameMessage(t *testing.T) {
+	engineStorage.Incidents = make(map[int64]runtime.Incident)
+	// setup
+	process, err := bpmnEngine.LoadFromFile(t.Context(), "./test-cases/multi_instance_parallel_sub_process_task.bpmn")
+	assert.NoError(t, err)
+
+	// when
+	variableContext := make(map[string]interface{}, 1)
+	variableContext["testInputCollection"] = []string{"test1", "test2", "test3"}
+	instance, err := bpmnEngine.CreateInstanceByKey(t.Context(), process.Key, variableContext)
+	assert.NoError(t, err)
+
+	// wait for subprocess to be created
+	time.Sleep(1 * time.Second)
+
+	// when
+	variables := map[string]interface{}{"payload": "message payload"}
+	err = bpmnEngine.PublishMessageByName(t.Context(), "Event_0g0g0nbMessage", "1324", variables)
+	assert.NoError(t, err)
+
+	// then
+	var foundChildInstance runtime.ProcessInstance
+	assert.Eventually(t, func() bool {
+		for _, pi := range engineStorage.ProcessInstances {
+			if pi.Type() == runtime.ProcessTypeSubProcess && pi.ProcessInstance().State == runtime.ActivityStateCompleted {
+				foundChildInstance = pi
+				return true
+			}
+		}
+		return false
+	}, 500*time.Millisecond, 100*time.Millisecond)
+	time.Sleep(1 * time.Second)
+
+	subscriptions, err := bpmnEngine.persistence.FindProcessInstanceMessageSubscriptions(t.Context(), foundChildInstance.ProcessInstance().Key, runtime.ActivityStateActive)
+	assert.NoError(t, err)
+	assert.Equal(t, 0, len(subscriptions))
+	subscriptions, err = bpmnEngine.persistence.FindProcessInstanceMessageSubscriptions(t.Context(), instance.ProcessInstance().Key, runtime.ActivityStateActive)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(subscriptions))
+
+	instance, err = bpmnEngine.persistence.FindProcessInstanceByKey(t.Context(), instance.ProcessInstance().Key)
+	assert.NoError(t, err)
+	assert.Equal(t, runtime.ActivityStateActive, instance.ProcessInstance().GetState(), "Parent instance should be completed")
+
+	instance, err = bpmnEngine.persistence.FindProcessInstanceByKey(t.Context(), foundChildInstance.ProcessInstance().Key)
+	assert.NoError(t, err)
+	assert.Equal(t, runtime.ActivityStateCompleted, instance.ProcessInstance().GetState(), "Child instance should be completed")
+
+	countFailed := 0
+	multiInstanceActive := 0
+	for _, p := range engineStorage.ProcessInstances {
+		if p.ProcessInstance().State == runtime.ActivityStateFailed && p.Type() == runtime.ProcessTypeSubProcess {
+			countFailed++
+		}
+		if p.Type() == runtime.ProcessTypeMultiInstance && p.ProcessInstance().State == runtime.ActivityStateActive {
+			multiInstanceActive++
+		}
+	}
+	assert.Equal(t, 2, countFailed)
+	assert.Equal(t, 1, multiInstanceActive)
+
+	assert.Equal(t, 2, len(engineStorage.Incidents))
+	assert.Equal(t, 2, len(engineStorage.Incidents))
+
+	jobs := findActiveJobsForProcessInstance(instance.ProcessInstance().Key, "TestType")
+	assert.NoError(t, err)
+	assert.Equal(t, 0, len(jobs))
+}
+
 func TestMultiInstanceSkipsWhenInputIsEmptyButFillsOutputWithEmptyList(t *testing.T) {
 	// setup
-	process, err := bpmnEngine.LoadFromFile("./test-cases/multi_instance_service_task.bpmn")
+	process, err := bpmnEngine.LoadFromFile(t.Context(), "./test-cases/multi_instance_service_task.bpmn")
 	assert.NoError(t, err)
 
 	variableName := "testJobOutput"
@@ -897,7 +1461,7 @@ func TestMultiInstanceSkipsWhenInputIsEmptyButFillsOutputWithEmptyList(t *testin
 	}, 500*time.Millisecond, 100*time.Millisecond)
 	time.Sleep(1 * time.Second)
 
-	instance, err = bpmnEngine.FindProcessInstance(instance.ProcessInstance().Key)
+	instance, err = bpmnEngine.FindProcessInstance(t.Context(), instance.ProcessInstance().Key)
 	assert.NoError(t, err)
 	// then
 	assert.NotNil(t, instance, "Process instance needs to be present")
@@ -920,7 +1484,7 @@ func TestMultiInstanceSkipsWhenInputIsEmptyButFillsOutputWithEmptyList(t *testin
 
 func TestMultiInstanceParallelSkipsWhenInputIsEmptyButFillsOutputWithEmptyList(t *testing.T) {
 	// setup
-	process, err := bpmnEngine.LoadFromFile("./test-cases/multi_instance_parallel_service_task.bpmn")
+	process, err := bpmnEngine.LoadFromFile(t.Context(), "./test-cases/multi_instance_parallel_service_task.bpmn")
 	assert.NoError(t, err)
 
 	variableName := "testJobOutput"
@@ -953,7 +1517,7 @@ func TestMultiInstanceParallelSkipsWhenInputIsEmptyButFillsOutputWithEmptyList(t
 	}, 500*time.Millisecond, 100*time.Millisecond)
 	time.Sleep(1 * time.Second)
 
-	instance, err = bpmnEngine.FindProcessInstance(instance.ProcessInstance().Key)
+	instance, err = bpmnEngine.FindProcessInstance(t.Context(), instance.ProcessInstance().Key)
 	assert.NoError(t, err)
 	// then
 	assert.NotNil(t, instance, "Process instance needs to be present")

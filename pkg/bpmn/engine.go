@@ -34,6 +34,8 @@ import (
 // Engine holds the state of the bpmn engine.
 // It interacts with the outside world using persistence storage interface and outside world interacts with it using public methods (message correlations, job updates, ...).
 type Engine struct {
+	context        context.Context
+	contextCancel  context.CancelFunc
 	taskhandlersMu *sync.RWMutex // we can probably remove this once we fix tests reuse same handler matchers
 	taskHandlers   []*taskHandler
 	exporters      []exporter.EventExporter
@@ -55,6 +57,7 @@ type EngineOption = func(*Engine)
 
 // NewEngine creates a new instance of the BPMN Engine;
 func NewEngine(options ...EngineOption) Engine {
+	ctx, cancel := context.WithCancel(context.Background())
 	logger := hclog.Default()
 	meter := otel.GetMeterProvider().Meter("bpmn-engine")
 	tracer := otel.GetTracerProvider().Tracer("bpmn-engine")
@@ -63,9 +66,12 @@ func NewEngine(options ...EngineOption) Engine {
 		logger.Error("Failed to initialize metrics for the engine", "err", err)
 	}
 	persistence := inmemory.NewStorage()
-	feelRuntime := feel.NewFeelinRuntime(context.TODO(), 1, 1)
-	jsRuntime := js.NewJsRuntime(context.TODO(), 1, 1)
+	feelRuntime := feel.NewFeelinRuntime(1, 1)
+	jsRuntime := js.NewJsRuntime(1, 1)
+
 	engine := Engine{
+		context:          ctx,
+		contextCancel:    cancel,
 		taskhandlersMu:   &sync.RWMutex{},
 		taskHandlers:     []*taskHandler{},
 		exporters:        []exporter.EventExporter{},
@@ -101,6 +107,7 @@ func EngineWithStorage(persistence storage.Storage) EngineOption {
 func EngineWithStorageAndFeel(persistence storage.Storage, feelRuntime script.FeelRuntime) EngineOption {
 	return func(engine *Engine) {
 		engine.persistence = persistence
+		engine.feelRuntime.Stop()
 		engine.feelRuntime = feelRuntime
 		engine.dmnEngine = dmn.NewEngine(dmn.EngineWithStorage(persistence), dmn.EngineWithFeel(feelRuntime))
 	}
@@ -108,6 +115,7 @@ func EngineWithStorageAndFeel(persistence storage.Storage, feelRuntime script.Fe
 
 func EngineWithJs(jsRuntime script.JsRuntime) EngineOption {
 	return func(engine *Engine) {
+		engine.jsRuntime.Stop()
 		engine.jsRuntime = jsRuntime
 	}
 }
@@ -588,7 +596,7 @@ func (engine *Engine) handleActivity(ctx context.Context, batch *EngineBatch, in
 	case *bpmn20.TBusinessRuleTask:
 		activityResult, err = engine.createBusinessRuleTask(ctx, batch, instance, element, currentToken)
 	default:
-		return nil, fmt.Errorf("failed to process %s %d: %w", element.GetType(), activity.GetKey(), errors.New("unsupported activity"))
+		return nil, fmt.Errorf("unsupported element type '%T' with id '%s': element is not supported by the engine", activity.Element(), activity.Element().GetId())
 	}
 
 	// Now check whether the activity ended right away and the process can move on or it needs to wait for external event
@@ -596,7 +604,7 @@ func (engine *Engine) handleActivity(ctx context.Context, batch *EngineBatch, in
 	case runtime.ActivityStateActive:
 		currentToken.State = runtime.TokenStateWaiting
 		// TODO: we are in waiting state so we instantiate boundary event subscriptions
-		err := createBoundaryEventSubscriptions(ctx, engine, batch, currentToken, instance, activity.Element())
+		err := engine.createBoundaryEventSubscriptions(ctx, batch, currentToken, instance, activity.Element())
 		if err != nil {
 			return nil, fmt.Errorf("failed to process boundary events for %s %d: %w", element.GetType(), activity.GetKey(), err)
 		}
@@ -615,8 +623,8 @@ func (engine *Engine) handleActivity(ctx context.Context, batch *EngineBatch, in
 	}
 }
 
-func createBoundaryEventSubscriptions(ctx context.Context, engine *Engine, batch *EngineBatch, currentToken runtime.ExecutionToken, instance runtime.ProcessInstance, element bpmn20.FlowNode) error {
-	bes := bpmn20.FindBoundaryEventsForActivity(&instance.ProcessInstance().Definition.Definitions, element)
+func (engine *Engine) createBoundaryEventSubscriptions(ctx context.Context, batch *EngineBatch, currentToken runtime.ExecutionToken, instance runtime.ProcessInstance, element bpmn20.FlowNode) error {
+	bes := bpmn20.FindBoundaryEventsForActivity(&instance.ProcessInstance().Definition.Definitions.Process.TFlowElementsContainer, element.GetId())
 	for _, be := range bes {
 		switch be.EventDefinition.(type) {
 		case bpmn20.TMessageEventDefinition:
@@ -921,6 +929,9 @@ func (engine *Engine) handleDefaultElementTransition(
 
 	// No outgoing associations
 	if len(element.GetOutgoingAssociation()) == 0 {
+		if element.GetType() != bpmn20.ElementTypeEndEvent {
+			return nil, fmt.Errorf("flow node %s of type %s does not have outgoing associations but is not an end event", element.GetId(), element.GetType())
+		}
 		resTokens[0].State = runtime.TokenStateCompleted
 	}
 

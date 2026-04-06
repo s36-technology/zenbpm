@@ -1,5 +1,7 @@
 package bpmn20
 
+import "encoding/xml"
+
 type TFlowElementsContainer struct {
 	StartEvents            []TStartEvent             `xml:"startEvent"`
 	EndEvents              []TEndEvent               `xml:"endEvent"`
@@ -17,6 +19,18 @@ type TFlowElementsContainer struct {
 	CallActivity           []TCallActivity           `xml:"callActivity"`
 	BoundaryEvent          []TBoundaryEvent          `xml:"boundaryEvent"`
 	SubProcess             []TSubProcess             `xml:"subProcess"`
+	// Catches any XML element not matched by the fields above.
+	// Used to detect unsupported BPMN elements at validation time.
+	UnknownElements []TUnknownElement `xml:",any"`
+}
+
+// TUnknownElement captures any XML element not explicitly handled by TFlowElementsContainer.
+// Presence of incoming or outgoing child elements indicates a flow node (i.e. unsupported).
+type TUnknownElement struct {
+	XMLName  xml.Name
+	Id       string   `xml:"id,attr"`
+	Incoming []string `xml:"incoming"`
+	Outgoing []string `xml:"outgoing"`
 }
 
 type TProcess struct {
@@ -59,6 +73,12 @@ func (p *TProcess) GetInternalTaskById(id string) InternalTask {
 			return &e
 		}
 	}
+	for _, e := range p.SubProcess {
+		if res := e.GetInternalTaskById(id); res != nil {
+			return res
+		}
+	}
+
 	return nil
 }
 
@@ -131,6 +151,11 @@ func (p *TProcess) GetFlowNodeById(id string) FlowNode {
 	for _, e := range p.SubProcess {
 		if e.GetId() == id {
 			return &e
+		}
+	}
+	for _, e := range p.SubProcess {
+		if res := e.GetFlowNodeById(id); res != nil {
+			return res
 		}
 	}
 

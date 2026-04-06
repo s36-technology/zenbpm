@@ -40,11 +40,8 @@ func (engine *Engine) publishMessageOnListener(ctx context.Context, batch *Engin
 
 func (engine *Engine) handleBoundaryMessage(ctx context.Context, batch *EngineBatch, message runtime.MessageSubscription, instance runtime.ProcessInstance, variables map[string]interface{}) ([]runtime.ExecutionToken, error) {
 	var listener *bpmn20.TBoundaryEvent
-
-	for _, be := range instance.ProcessInstance().Definition.Definitions.Process.BoundaryEvent {
-		if be.AttachedToRef != message.Token.ElementId {
-			continue
-		}
+	boundaryEvents := bpmn20.FindBoundaryEventsForActivity(&instance.ProcessInstance().Definition.Definitions.Process.TFlowElementsContainer, message.Token.ElementId)
+	for _, be := range boundaryEvents {
 		if messageDef, ok := be.EventDefinition.(bpmn20.TMessageEventDefinition); ok {
 			m, err := instance.ProcessInstance().Definition.Definitions.GetMessageByRef(messageDef.MessageRef)
 			if err != nil {
@@ -56,6 +53,7 @@ func (engine *Engine) handleBoundaryMessage(ctx context.Context, batch *EngineBa
 			}
 		}
 	}
+
 	if listener == nil {
 		return nil, fmt.Errorf("failed to find boundary event for message subscription %s", message.Name)
 	}
@@ -77,7 +75,8 @@ func (engine *Engine) publishMessageOnBoundaryListener(ctx context.Context, batc
 	}
 
 	variableHolder := runtime.NewVariableHolder(&instance.ProcessInstance().VariableHolder, nil)
-	if _, err = variableHolder.PropagateOutputVariablesToParent(listener.Output, variables, engine.evaluateExpression); err != nil {
+	outputVariables, err := variableHolder.PropagateOutputVariablesToParent(listener.Output, variables, engine.evaluateExpression)
+	if err != nil {
 		return nil, fmt.Errorf("failed to propagate variables to process instance %d: %w", instance.ProcessInstance().Key, err)
 	}
 	err = batch.SaveProcessInstance(ctx, instance)
@@ -123,12 +122,40 @@ func (engine *Engine) publishMessageOnBoundaryListener(ctx context.Context, batc
 		if err != nil {
 			return nil, fmt.Errorf("failed to recreate message subscription: %w", err)
 		}
+
+		token = runtime.ExecutionToken{
+			Key:                engine.generateKey(),
+			ElementInstanceKey: engine.generateKey(),
+			ElementId:          listener.GetId(),
+			ProcessInstanceKey: instance.ProcessInstance().Key,
+			State:              runtime.TokenStateRunning,
+		}
+		err = batch.SaveToken(ctx, token)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	err = batch.SaveFlowElementInstance(ctx,
+		runtime.FlowElementInstance{
+			Key:                engine.generateKey(),
+			ProcessInstanceKey: instance.ProcessInstance().GetInstanceKey(),
+			ElementId:          listener.GetId(),
+			CreatedAt:          time.Now(),
+			ExecutionTokenKey:  token.Key,
+			InputVariables:     nil,
+			OutputVariables:    outputVariables,
+		},
+	)
+	if err != nil {
+		return nil, err
 	}
 
 	tokens, err := engine.handleElementTransition(ctx, batch, instance, listener, token)
 	if err != nil {
 		return nil, fmt.Errorf("failed to process MessageSubscription flow transition %s: %w", listener.GetId(), err)
 	}
+
 	return tokens, nil
 }
 
@@ -333,7 +360,7 @@ func (engine *Engine) handleIntermediateThrowEvent(ctx context.Context, batch *E
 			}
 			return tokens, nil
 		default:
-			panic(fmt.Sprintf("unexpected activity state in handling MessageThrowEvent %s", activityResult))
+			return []runtime.ExecutionToken{currentToken}, fmt.Errorf("unexpected activity state in handling MessageThrowEvent %s", activityResult)
 		}
 
 	case bpmn20.TLinkEventDefinition:
@@ -342,7 +369,9 @@ func (engine *Engine) handleIntermediateThrowEvent(ctx context.Context, batch *E
 			return nil, fmt.Errorf("failed to handle IntermediateThrowLinkEvent: %w", err)
 		}
 		return []runtime.ExecutionToken{token}, nil
+	case nil:
+		return nil, fmt.Errorf("unsupported element: intermediateThrowEvent '%s' has no event definition (none intermediate throw event is not supported)", ite.GetId())
 	default:
-		panic(fmt.Sprintf("unhandled type for IntermediateThrowEvent EventDefinition: %T", ed))
+		return nil, fmt.Errorf("[invariant check] unhandled type for IntermediateThrowEvent EventDefinition: %T", ed)
 	}
 }

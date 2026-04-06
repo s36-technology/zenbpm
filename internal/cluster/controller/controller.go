@@ -320,12 +320,12 @@ func (c *Controller) handlePartitionStateInitializing(ctx context.Context, parti
 	}
 
 	if partitionNode.FeelRuntime == nil && partitionNode.IsLeader(ctx) {
-		partitionNode.FeelRuntime = feel.NewFeelinRuntime(ctx, c.Config.Script.Feel.MaxVmPoolSize, c.Config.Script.Feel.MinVmPoolSize)
+		partitionNode.FeelRuntime = feel.NewFeelinRuntime(c.Config.Script.Feel.MaxVmPoolSize, c.Config.Script.Feel.MinVmPoolSize)
 
 	}
 
 	if partitionNode.JsRuntime == nil && partitionNode.IsLeader(ctx) {
-		partitionNode.JsRuntime = js.NewJsRuntime(ctx, c.Config.Script.Js.MaxVmPoolSize, c.Config.Script.Js.MinVmPoolSize)
+		partitionNode.JsRuntime = js.NewJsRuntime(c.Config.Script.Js.MaxVmPoolSize, c.Config.Script.Js.MinVmPoolSize)
 	}
 
 	if partitionNode.Engine == nil && partitionNode.IsLeader(ctx) {
@@ -335,7 +335,7 @@ func (c *Controller) handlePartitionStateInitializing(ctx context.Context, parti
 			// TODO: do something when this fails
 		}
 		partitionNode.Engine = engine
-		err = partitionNode.Engine.Start()
+		err = partitionNode.Engine.Start(ctx)
 		if err != nil {
 			c.logger.Error(fmt.Sprintf("failed to start engine for partition %d", partitionId), "err", err.Error())
 			// TODO: do something when this fails

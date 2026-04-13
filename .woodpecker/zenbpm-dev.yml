@@ -1,0 +1,32 @@
+labels:
+  deploy-target: s36dev
+when:
+  - event: push
+    branch: develop
+    path: "**"
+  - event: manual
+    evaluate: 'SERVICE == "zenbpm"'
+steps:
+  deploy-zenbpm:
+    image: pelotech/drone-helm3
+    settings:
+      mode: upgrade
+      chart_version: ""
+      kube_context: microk8s
+      kube_api_server: https://kubernetes.default.svc:443
+      kube_token:
+        from_secret: microk8s_token_dev
+      skip_tls_verify: true
+      namespace: s36-tool
+      release: s36-zenbpm-dev
+      chart: ./helm
+      values_files:
+        - ./helm/values.yaml
+      values: "podAnnotations.deployedAt=${CI_COMMIT_SHA}"
+    when:
+      - event: push
+        branch: develop
+        status: success
+        path: "**"
+      - event: manual
+        evaluate: 'SERVICE == "zenbpm"'
